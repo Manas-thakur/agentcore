@@ -44,7 +44,7 @@ User Input
 
 **File:** `agentcore/runtime/model_client.py` (and per-provider files)
 
-**Purpose:** Abstract away the differences between LLM providers (Ollama, OpenAI, vLLM, Anthropic, etc.) behind a common interface. Every provider exposes a REST API (or Python binding), but they differ in request/response formats, streaming behavior, rate limits, and pricing.
+**Purpose:** Abstract away the differences between LLM providers (Ollama, OpenAI, vLLM, etc.) behind a common interface. Every provider exposes a REST API (or Python binding), but they differ in request/response formats, streaming behavior, rate limits, and pricing.
 
 **Interface:**
 
@@ -94,7 +94,6 @@ class ModelClient(ABC):
 | Ollama | `OllamaClient` | Ollama REST API | `http://localhost:11434/api/chat`, streaming via SSE |
 | OpenAI | `OpenAIClient` | OpenAI Python SDK | Compatible with any OpenAI-proxy (Groq, Together, etc.) |
 | vLLM | `VLLMClient` | vLLM `--api` endpoint | OpenAI-compatible, optimized for local GPU |
-| Anthropic | `AnthropicClient` | Anthropic Messages API | Different message format, tool use via beta |
 
 **Key Design Decisions:**
 
@@ -332,8 +331,7 @@ packages/python/runtime/
 │   ├── __init__.py
 │   ├── ollama.py            # OllamaClient
 │   ├── openai.py            # OpenAIClient
-│   ├── vllm.py              # VLLMClient
-│   └── anthropic.py         # AnthropicClient
+│   └── vllm.py              # VLLMClient
 ├── memory.py                # MemorySystem ABC + implementations
 ├── context.py               # ContextManager, TokenCounter, TokenBudget
 ├── truncation.py            # Truncation strategies

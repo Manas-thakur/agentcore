@@ -251,10 +251,6 @@ COST_TABLE = {
         "input_per_1k": 0.0025,    # $0.0025 per 1K input tokens
         "output_per_1k": 0.010,    # $0.01 per 1K output tokens
     },
-    "claude-3.5-sonnet": {
-        "input_per_1k": 0.003,
-        "output_per_1k": 0.015,
-    },
     "local": {
         "input_per_1k": 0.0,       # No API cost
         "output_per_1k": 0.0,

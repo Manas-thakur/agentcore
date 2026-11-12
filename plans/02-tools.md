@@ -111,7 +111,6 @@ class ToolRegistry:
     def list(self, category: str | None = None) -> list[ToolDefinition]: ...
     
     def openai_format(self) -> list[dict]: ...
-    def anthropic_format(self) -> list[dict]: ...
     def ollama_format(self) -> list[dict]: ...
     
     def execute(self, name: str, params: dict) -> ToolResult: ...
@@ -121,7 +120,7 @@ class ToolRegistry:
 ```
 
 **Key Design Decisions:**
-- **Format conversion methods.** Different LLM providers expect different JSON Schema formats for tools. The registry provides `openai_format()`, `anthropic_format()`, `ollama_format()` that convert internal `ToolDefinition` to the provider-specific format on demand.
+- **Format conversion methods.** Different LLM providers expect different JSON Schema formats for tools. The registry provides `openai_format()` and `ollama_format()` that convert internal `ToolDefinition` to the provider-specific format on demand.
 - **Subset creation.** `create_subset(names)` returns a new registry with only the specified tools. Useful for per-agent tool restrictions (the Researcher agent gets search tools but not database tools).
 - **Lazy registration.** Tools can be registered from entry points or discovered by scanning packages, enabling plugins.
 
@@ -130,7 +129,6 @@ class ToolRegistry:
 | Provider | Tool Format | Key Difference |
 |----------|-------------|----------------|
 | OpenAI | `functions` array | `parameters` uses standard JSON Schema |
-| Anthropic | `tools` array | Different structure, requires `input_schema` |
 | Ollama | `tools` array | Similar to OpenAI but with minor differences |
 | vLLM | OpenAI-compatible | Same as OpenAI |
 

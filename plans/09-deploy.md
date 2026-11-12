@@ -311,7 +311,7 @@ module "artifact_registry" {
 @dataclass
 class AgentCoreConfig:
     # LLM
-    llm_provider: str = "ollama"                # "ollama" | "openai" | "vllm" | "anthropic"
+    llm_provider: str = "ollama"                # "ollama" | "openai" | "vllm"
     llm_model: str = "llama3.1:8b"
     ollama_base_url: str = "http://localhost:11434"
     openai_api_key: str = ""
