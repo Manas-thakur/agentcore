@@ -1,0 +1,9 @@
+.git
+.venv
+.agentcore
+.pytest_cache
+.ruff_cache
+**/__pycache__
+workspace
+tests
+plans

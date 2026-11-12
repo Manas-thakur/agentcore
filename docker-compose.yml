@@ -1,0 +1,37 @@
+# AgentCore + Ollama.
+#   docker compose up --build
+#   docker compose exec ollama ollama pull qwen2.5:7b   # first run only
+#   open http://localhost:8000
+# For GPU inference uncomment the "deploy" block (needs the NVIDIA container toolkit).
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  agentcore:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      # "auto" uses Ollama when the model below is pulled, otherwise the offline mock model.
+      AGENTCORE_MODEL: auto
+      AGENTCORE_OLLAMA_MODEL: qwen2.5:7b
+    volumes:
+      - traces:/data
+    depends_on:
+      - ollama
+
+volumes:
+  ollama:
+  traces:

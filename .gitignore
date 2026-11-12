@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# AgentCore local data (traces, checkpoints, eval outputs)
+.agentcore/
+workspace/
+report.md
+report.trace.json
+report.cost.json
+eval-results.json
+eval-report.md
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+.env

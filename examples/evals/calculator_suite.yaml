@@ -1,0 +1,54 @@
+# Eval suite for a calculator agent.
+#
+#   agentcore eval --suite examples/evals/calculator_suite.yaml --model mock
+#   agentcore eval --suite examples/evals/calculator_suite.yaml --model ollama:qwen2.5:7b
+#
+# Metrics are chosen per case from what it specifies:
+#   expected_output (+ match: exact|contains|regex), expected_tool_calls,
+#   expected_trajectory (ordered tool names), max_steps, rubric (LLM-as-judge).
+name: calculator-basic
+description: Arithmetic questions that must be answered with the calculator tool.
+agent:
+  system_prompt: >-
+    You are a careful math assistant. Always use the calculator tool for arithmetic,
+    then state the final numeric answer.
+  tools: [calculator]
+  max_steps: 5
+
+cases:
+  - name: multiply_add
+    input: "What is 17 * 23 + 4?"
+    expected_output: "395"
+    expected_tool_calls:
+      - tool: calculator
+        args: {expression: "17 * 23 + 4"}
+    max_steps: 3
+    tags: [arithmetic]
+
+  - name: parentheses
+    input: "Compute (12 + 8) * 3 - 5."
+    expected_output: "55"
+    expected_tool_calls: [calculator]
+    tags: [arithmetic]
+
+  - name: power
+    input: "What is 2 ** 16?"
+    expected_output: "65536"
+    expected_trajectory: [calculator]
+    tags: [arithmetic]
+
+  - name: division_regex
+    input: "What is 22 / 7 rounded result?"
+    expected_output: "3\\.14\\d*"
+    match: regex
+    expected_tool_calls: [calculator]
+    tags: [arithmetic, float]
+
+  - name: modulo
+    input: "What is 1000 % 7?"
+    expected_output: "6"
+    expected_tool_calls:
+      - tool: calculator
+        args: {expression: "1000 % 7"}
+        match: exact
+    tags: [arithmetic]

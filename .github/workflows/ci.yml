@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: lint + test (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install
+        run: uv sync --all-extras --python ${{ matrix.python-version }}
+      - name: Ruff
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+      - name: Tests
+        run: uv run pytest -q
+      - name: Eval suite (offline mock model)
+        run: uv run agentcore eval --suite examples/evals/calculator_suite.yaml --model mock --markdown eval-report.md
+      - name: Examples (offline)
+        run: |
+          uv run python examples/calculator_agent.py --model mock
+          uv run python examples/rag_qa.py --model mock
+          uv run python examples/workflow_graph.py
+          uv run python examples/multi_agent.py --model mock
+      - name: Eval summary
+        if: always() && matrix.python-version == '3.12'
+        run: test -f eval-report.md && cat eval-report.md >> "$GITHUB_STEP_SUMMARY" || true
