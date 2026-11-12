@@ -15,6 +15,34 @@ Everything runs **offline** out of the box: a deterministic rule-based `mock` mo
 examples, tests and CI. Point the same code at a local model (Ollama) or any OpenAI-compatible
 server (OpenAI, vLLM, LM Studio, Groq, llama.cpp, ...) by changing one flag.
 
+`agentcore serve` adds a web app (streaming chat playground, trace waterfalls, eval runs with
+baselines, an overview of latency/tokens/cost, a tool tester) and an **OpenAI-compatible
+`/v1/chat/completions` endpoint** backed by the agent, so existing OpenAI clients can talk to it.
+
+| Playground | Trace waterfall |
+|---|---|
+| ![Streaming chat with inline tool calls](docs/screenshots/playground.png) | ![Span waterfall with model inputs and outputs](docs/screenshots/trace-waterfall.png) |
+| **Evals** | **Overview** |
+| ![Eval run compared against a baseline](docs/screenshots/evals.png) | ![KPIs and charts over time](docs/screenshots/overview.png) |
+
+## Features
+
+- **Agent runtime** - ReAct loop with native tool calling, parallel tools, streaming, memory tiers,
+  reflection, stuck detection, timeouts; Ollama, any OpenAI-compatible server, or offline `mock`.
+- **Tools** - `@tool` turns typed Python functions into JSON-Schema tools with validation, retries,
+  rate limits and a subprocess sandbox.
+- **Web app** (`agentcore serve`) - multi-turn chat over SSE with server-side sessions, inline tool
+  cards, stop button and per-answer trace links; searchable traces with a span waterfall, model
+  inputs/outputs, tokens and cost; eval suites run in the background with history and regression
+  highlighting; KPI overview; tool "try it" forms; light/dark themes; works at phone width.
+- **API** - one-shot `/v1/agent`, streaming `/api/chat`, OpenAI-compatible `/v1/chat/completions`
+  (with `stream: true`), optional API key, configurable CORS, request size limits.
+- **Evaluation** - YAML suites, trajectory and tool-call matching, LLM-as-judge, record/replay
+  cassettes, baselines and regression gates for CI.
+- **RAG, vector indexes, workflow graphs, multi-agent, observability** - all from scratch, all tested.
+- **Project tooling** - `agentcore init` scaffolds a runnable project, `agentcore doctor` checks the
+  environment, `agentcore.toml` holds defaults.
+
 ---
 
 ## Philosophy
@@ -54,7 +82,7 @@ implementation of all of those.
 | `agentcore.graph` | State-graph engine: nodes, static/conditional edges, parallel fan-out and joins, per-key reducers, retries, fallbacks, checkpoints (memory/file), `interrupt()`/resume for human-in-the-loop, saga compensation, subgraphs, Mermaid export | `StateGraph`, `interrupt`, `FileCheckpointer` |
 | `agentcore.agents` | Researcher, Coder (sandboxed execution), Reviewer, Planner; in-process A2A message bus (direct, broadcast, topics, request/response); manager-worker, pipeline and peer-review patterns | `ResearcherAgent`, `CoderAgent`, `ReviewerAgent`, `PlannerAgent`, `MessageBus`, `ManagerWorker`, `Pipeline` |
 | `agentcore.obs` | Span tracer (contextvar-based, async-safe) with optional OpenTelemetry mirroring, JSONL trace store, Prometheus-style metrics, JSON logging with trace ids, per-model cost tracking | `configure_tracing`, `JSONLTraceStore`, `MetricsCollector`, `CostTracker` |
-| `agentcore.server` | FastAPI app: `POST /v1/agent`, trace API, `/metrics`, and a self-contained HTML trace dashboard | `create_app` |
+| `agentcore.server` | FastAPI app: agent API, OpenAI-compatible chat completions, SSE chat with sessions, trace/eval/overview APIs, API-key auth, and the no-build web app | `create_app` |
 | `agentcore.research` | Showcase "technical researcher": cited markdown report + trace + cost files | `research` |
 
 ### How it compares
@@ -78,12 +106,22 @@ Requires Python 3.10+.
 # Library + CLI
 pip install "git+https://github.com/Manas-thakur/agentcore"
 
-# With the HTTP server / dashboard (FastAPI + uvicorn)
+# With the HTTP server / web app (FastAPI + uvicorn)
 pip install "agentcore[server] @ git+https://github.com/Manas-thakur/agentcore"
 
 # Everything (server, OpenTelemetry, pydantic support)
 pip install "agentcore[all] @ git+https://github.com/Manas-thakur/agentcore"
 ```
+
+Releases also ship as a wheel on the [GitHub Releases](https://github.com/Manas-thakur/agentcore/releases)
+page and as a container image:
+
+```bash
+docker run -p 8000:8000 -e AGENTCORE_MODEL=mock ghcr.io/manas-thakur/agentcore:latest
+```
+
+(PyPI publishing is wired up in the release workflow but switched off until a trusted publisher is
+configured - see [Releasing](#releasing).)
 
 ### Development setup (uv)
 
@@ -102,6 +140,17 @@ are thin wrappers around the `uv` commands; on Windows without `make`, run the c
 
 Every command below works without any model server, using the deterministic `mock` model.
 Inside a clone, prefix commands with `uv run` (or activate `.venv`).
+
+```bash
+# Start a new project: agent.py with a sample @tool, evals/basic.yaml, agentcore.toml, .env.example
+agentcore init my-agent && cd my-agent
+python agent.py --model mock "What is the capital of France?"
+agentcore eval --suite evals/basic.yaml --model mock
+agentcore serve --model mock          # web app at http://127.0.0.1:8000
+agentcore doctor                      # environment + model reachability check
+```
+
+Or explore the repository's own examples:
 
 ```bash
 # A tool-using ReAct agent
@@ -130,10 +179,24 @@ agentcore research "How does HNSW search work?" --docs examples/data --model moc
 agentcore traces list
 agentcore traces show <trace-id-prefix>
 
-# API + trace dashboard at http://127.0.0.1:8000 (needs the [server] extra)
+# Web app + API at http://127.0.0.1:8000 (needs the [server] extra)
 agentcore serve --model mock
 curl -s -X POST http://127.0.0.1:8000/v1/agent -H "Content-Type: application/json" \
      -d '{"input": "What is 2 ** 10?"}'
+
+# Any OpenAI client works against the agent
+curl -s http://127.0.0.1:8000/v1/chat/completions -H "Content-Type: application/json" \
+     -d '{"model": "agentcore", "messages": [{"role": "user", "content": "What is 2 ** 10?"}]}'
+```
+
+```python
+from openai import OpenAI   # pip install openai
+
+client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="unused-unless-AGENTCORE_API_KEY-is-set")
+for chunk in client.chat.completions.create(
+    model="agentcore", messages=[{"role": "user", "content": "What is 17 * 23?"}], stream=True
+):
+    print(chunk.choices[0].delta.content or "", end="")
 ```
 
 ### Using a real model
@@ -353,37 +416,105 @@ print(get_metrics().export_prometheus())
 Spans: `agent.run:<name>` > `agent.step` > `model.generate` (tokens, cost, latency) / `tool.execute`;
 `graph.run:<name>` > `graph.node:<node>`; `a2a.deliver`. With `use_otel=True` and the `otel` extra
 installed, every span is mirrored to the OpenTelemetry API so any configured exporter (OTLP, Jaeger,
-Tempo, ...) receives it. The dashboard served by `agentcore serve` reads the same JSONL files.
+Tempo, ...) receives it. The web app served by `agentcore serve` reads the same JSONL files.
+Model spans also record the (size-bounded) prompt messages and the response, so the trace view can
+show exactly what the model saw; pass `trace_content=False` to `Agent` to turn that off.
+
+## Web app
+
+`agentcore serve` serves a no-build web app (plain HTML/CSS/ES modules, no CDN scripts) next to the API:
+
+| Page | What it does |
+|---|---|
+| **Playground** | Multi-turn chat streamed over SSE. Sessions live on the server (memory + transcript, persisted under the state dir). Tool calls render inline as expandable cards with arguments, result, duration and errors. Model picker (from `/v1/models` or free text), per-tool toggles, system prompt, max steps, a Stop button, and a "View trace" link on every answer. Markdown answers are rendered with an escape-first sanitizer. |
+| **Traces** | Search and filter by text, status, model, kind (agent / eval) and date. The detail view shows a nested span waterfall with duration bars, span attributes, model inputs/outputs, tokens and cost, and exports the trace as JSON. |
+| **Evals** | Lists suites from the configured eval dirs, runs one in the background with progress polling, shows per-case scores and metric breakdowns, keeps a run history, and compares each run with a chosen baseline (regressions highlighted). |
+| **Overview** | Runs, success rate, p50/p95 latency, tokens and cost for 24 h / 7 d / 30 d, with charts over time, top tools by calls and errors, and models. |
+| **Tools** | Every enabled tool with its JSON Schema and a generated "try it" form (or raw JSON) that invokes it directly; each invocation is traced. |
+| **Settings** | Theme (system / light / dark), the API key stored in this browser, and the server's effective configuration. |
+
+## HTTP API
+
+| Method + path | Description |
+|---|---|
+| `GET /health` | Liveness, version, default model, enabled tools, whether auth is on (always public) |
+| `GET /v1/models` | OpenAI-style model list: default model, `models` from config, `mock`, local Ollama models |
+| `POST /v1/agent` | Run once: `{"input": "..."}` or `{"messages": [...]}`; optional `model`, `tools`, `system_prompt`, `max_steps`, `session_id` |
+| `POST /v1/chat/completions` | OpenAI-compatible; `model` is `agentcore` (server default) or a spec like `mock` / `ollama:<m>`; supports `stream: true` and `stream_options.include_usage`; the agent runs the server's tools; the response adds an `agentcore` object with `trace_id` and tool calls |
+| `POST /api/chat` | Streaming chat turn (SSE). Body: `message`, optional `session_id`, `model`, `tools`, `system_prompt`, `max_steps`. Events: `session`, `run_start` (with `trace_id`), `step_start`, `token`, `model_response`, `tool_start`, `tool_end`, `reflection`, `final`, then `done`, `stopped` or `error` |
+| `GET/POST /api/sessions`, `GET/DELETE /api/sessions/{id}`, `POST /api/sessions/{id}/stop` | Session list/create, transcript + memory, delete, cancel the running turn |
+| `GET /api/traces` | Trace summaries; query `q`, `status`, `model`, `kind=agent\|eval`, `since`, `until` (epoch or ISO), `limit`, `offset`; total in `X-Total-Count` |
+| `GET /api/traces/facets`, `GET /api/traces/{id}`, `GET /api/traces/{id}/export` | Filter values; summary + spans (id or unique prefix); JSON download |
+| `GET /api/overview?days=7` | KPIs, time series, top tools, models, recent failures |
+| `GET /api/tools`, `POST /api/tools/{name}/invoke` | Enabled tools with schemas; invoke with `{"arguments": {...}}` |
+| `GET /api/evals/suites` | Suites discovered in the eval dirs (with last run and baseline) |
+| `POST /api/evals/runs`, `GET /api/evals/runs[?suite=]`, `GET /api/evals/runs/{id}`, `POST /api/evals/runs/{id}/baseline` | Start a background run (`{"suite": path-or-name, "model": ...}` -> 202), history, progress/results with diff vs baseline, set baseline |
+| `GET /api/config` | Effective configuration (never includes secrets) |
+| `GET /metrics` | Prometheus text format |
+| `GET /docs` | Interactive OpenAPI docs |
+
+**Security.** Set `AGENTCORE_API_KEY` to require `Authorization: Bearer <key>` (or `X-API-Key`) on
+every API route; the web app shell and `/health` stay public and the browser prompts for the key
+once. CORS is off unless you list origins (`--cors-origins`, `AGENTCORE_CORS_ORIGINS` or
+`[server].cors_origins`). Request bodies over 1 MiB are rejected with 413 (`max_body_kb`). Only
+`calculator` and `current_time` are enabled by default - think twice before exposing `python_exec`
+or the file tools on a network, and always set an API key when binding to a non-loopback address.
 
 ## CLI reference
 
 | Command | Description |
 |---|---|
+| `agentcore init [DIR] [--name N] [--force]` | Scaffold a project (agent.py with a sample `@tool`, `evals/basic.yaml`, `agentcore.toml`, `.env.example`, README) that runs offline with `--model mock` |
+| `agentcore doctor [--model M] [--ping]` | Check Python, extras, config, trace dir, tool modules, eval dirs, Ollama / OpenAI-compatible reachability (`--ping` sends one tiny request); exit 1 on failures |
 | `agentcore run SCRIPT [ARGS...]` | Run a Python script (e.g. an example) with arguments |
 | `agentcore chat [--model M] [--tools a,b] [-p PROMPT] [--stream] [-v]` | Interactive or one-shot chat with a tool-using agent (sliding-window memory) |
 | `agentcore eval --suite PATH [--model M] [...]` | Run an eval suite; options for baselines, regression threshold, record/replay, LLM judge, reports, `--fail-under` |
 | `agentcore traces list [--limit N]` / `agentcore traces show ID [--json]` | Inspect stored traces (`--dir` before the subcommand to change the directory) |
-| `agentcore serve [--host H] [--port P] [--model M] [--tools a,b]` | HTTP API + dashboard (requires `[server]`) |
+| `agentcore serve [--host H] [--port P] [--model M] [--tools a,b] [--cors-origins O]` | Web app + HTTP API (requires `[server]`) |
 | `agentcore research TOPIC (--docs DIR \| --web) [--out report.md]` | Researcher agent; writes report, trace and cost JSON |
-| `agentcore tools [--schema]` | List built-in tools and their JSON Schemas |
+| `agentcore tools [--schema]` | List built-in and configured custom tools and their JSON Schemas |
 
-HTTP API (`agentcore serve`): `POST /v1/agent` with `{"input": "..."}` or `{"messages": [...]}`
-(optional `model`, `tools`, `system_prompt`, `max_steps`); `GET /health`, `GET /v1/models`,
-`GET /api/traces`, `GET /api/traces/{id}`, `GET /metrics`, and the dashboard at `/`. Only
-`calculator` and `current_time` are enabled by default; enable more with `--tools`
-(be careful exposing `python_exec` or file tools on a network).
+Every command accepts `--config PATH` (before the subcommand); otherwise `./agentcore.toml` is used
+when present.
 
 ## Configuration
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `AGENTCORE_MODEL` | `auto` | Default model spec when `--model` is not given |
-| `AGENTCORE_OLLAMA_MODEL` | `qwen2.5:7b` | Model `auto` looks for in Ollama |
-| `OLLAMA_HOST` | `http://localhost:11434` | Ollama server URL |
-| `OPENAI_API_KEY` | - | API key for `openai:<model>` |
-| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Any OpenAI-compatible endpoint (vLLM, LM Studio, Groq, ...) |
-| `AGENTCORE_EMBEDDER` | `hash` | Embedder for `create_embedder()`: `hash`, `ollama:<model>`, `openai:<model>` |
-| `AGENTCORE_TRACE_DIR` | `.agentcore/traces` | Where the CLI and server write traces |
+Settings come from (highest priority first) CLI flags, environment variables, `agentcore.toml`,
+then built-in defaults. `agentcore init` writes a commented `agentcore.toml`:
+
+```toml
+model = "mock"                                   # default model spec
+models = ["ollama:qwen2.5:7b"]                   # extra entries for the web UI model picker
+tools = ["calculator", "current_time", "lookup_fact"]
+tool_modules = ["agent.py"]                      # .py files or modules defining @tool functions
+trace_dir = ".agentcore/traces"                  # relative paths resolve against this file
+eval_dirs = ["evals"]
+# data_dir = ".agentcore"                        # sessions + eval history (default: trace_dir/..)
+# system_prompt = "You are ..."
+
+[server]
+host = "127.0.0.1"
+port = 8000
+cors_origins = []
+max_body_kb = 1024
+```
+
+| Setting | `agentcore.toml` | Environment | Default |
+|---|---|---|---|
+| Default model | `model` | `AGENTCORE_MODEL` | `auto` |
+| Enabled tools | `tools` | `AGENTCORE_TOOLS` (comma-separated) | `calculator,current_time` (+ custom tools) |
+| Custom tool modules | `tool_modules` | - | none |
+| Trace directory | `trace_dir` | `AGENTCORE_TRACE_DIR` | `.agentcore/traces` |
+| State directory (sessions, eval history) | `data_dir` | `AGENTCORE_DATA_DIR` | parent of the trace dir |
+| Eval suite directories | `eval_dirs` | `AGENTCORE_EVAL_DIRS` | `evals`, `examples/evals` |
+| Server host / port | `[server] host`, `port` | - (`--host`, `--port`) | `127.0.0.1`, `8000` |
+| API key | never in the file | `AGENTCORE_API_KEY` | none (open) |
+| CORS origins | `[server] cors_origins` | `AGENTCORE_CORS_ORIGINS` | none |
+| Max request body | `[server] max_body_kb` | `AGENTCORE_MAX_BODY_KB` | 1024 |
+| Ollama model used by `auto` | - | `AGENTCORE_OLLAMA_MODEL` | `qwen2.5:7b` |
+| Ollama URL | - | `OLLAMA_HOST` | `http://localhost:11434` |
+| OpenAI-compatible key / URL | - | `OPENAI_API_KEY`, `OPENAI_BASE_URL` | -, `https://api.openai.com/v1` |
+| Embedder for `create_embedder()` | - | `AGENTCORE_EMBEDDER` | `hash` |
 
 Model specs: `mock`, `auto`, `ollama:<model>`, `openai:<model>`; `vllm:`, `lmstudio:` and `groq:`
 prefixes are aliases for the OpenAI-compatible client (they read `OPENAI_BASE_URL` / `OPENAI_API_KEY`).
@@ -404,13 +535,30 @@ Costs come from `agentcore.obs.PRICE_TABLE` (USD per 1M tokens, illustrative - p
 ## Deployment
 
 ```bash
-docker compose up --build                              # AgentCore API/dashboard + Ollama
+docker compose up --build                              # AgentCore web app/API + Ollama
 docker compose exec ollama ollama pull qwen2.5:7b      # first run only
 open http://localhost:8000
 ```
 
-The `Dockerfile` builds a slim image (`agentcore serve` on port 8000, traces in `/data`).
-`docker run -p 8000:8000 -e AGENTCORE_MODEL=mock <image>` runs it with no model server.
+The `Dockerfile` builds a slim image (`agentcore serve` on port 8000, traces, sessions and eval
+history in `/data`). `docker run -p 8000:8000 -e AGENTCORE_MODEL=mock ghcr.io/manas-thakur/agentcore`
+runs it with no model server; add `-e AGENTCORE_API_KEY=...` before exposing it.
+
+## Releasing
+
+1. Update `version` in `pyproject.toml` and `__version__` in `src/agentcore/__init__.py`, and add a
+   section to `CHANGELOG.md`.
+2. Tag and push: `git tag v0.2.0 && git push origin v0.2.0`.
+3. `.github/workflows/release.yml` then lints, tests and builds the sdist + wheel (failing if the
+   tag and package version differ), smoke-tests the wheel (`agentcore init` + eval), creates a
+   GitHub Release with the artifacts and the changelog section, and pushes
+   `ghcr.io/manas-thakur/agentcore:<version>`, `:<major>.<minor>` and `:latest` (amd64 + arm64)
+   using the built-in `GITHUB_TOKEN`.
+4. **PyPI** uses trusted publishing (no token stored in GitHub) and is skipped until you opt in:
+   create the project's trusted publisher on PyPI (owner `Manas-thakur`, repository `agentcore`,
+   workflow `release.yml`, environment `pypi`), create a `pypi` environment in the repository
+   settings, then set the repository variable `PYPI_PUBLISH=true`. If the `agentcore` name is
+   already taken on PyPI, change `name` in `pyproject.toml` first.
 
 ## Project layout
 
@@ -427,14 +575,18 @@ agentcore/
 │   ├── graph/            # state graph engine, checkpoints
 │   ├── agents/           # specialists, A2A bus, collaboration patterns
 │   ├── obs/              # tracing, storage, metrics, logging, cost
-│   ├── server/           # FastAPI app + static dashboard
+│   ├── server/           # FastAPI app, sessions, eval jobs, analytics, auth + static/ web app
+│   ├── config.py         # agentcore.toml + env loading, custom tool modules
+│   ├── scaffold.py       # `agentcore init` templates
+│   ├── doctor.py         # `agentcore doctor` checks
 │   ├── research.py       # showcase researcher
 │   └── cli.py            # `agentcore` command
 ├── examples/             # runnable demos, sample corpus, eval suite
 ├── tests/                # pytest suite (offline)
 ├── plans/                # original design documents for each component
-├── Dockerfile, docker-compose.yml, Makefile
-└── .github/workflows/ci.yml
+├── docs/screenshots/     # README images
+├── Dockerfile, docker-compose.yml, Makefile, CHANGELOG.md
+└── .github/workflows/    # ci.yml, release.yml
 ```
 
 ## Roadmap
@@ -442,7 +594,9 @@ agentcore/
 Implemented pragmatically from `plans/`; not done yet:
 
 - **TypeScript CLI and React dashboard** - replaced by the Python `agentcore` CLI and a
-  self-contained static HTML dashboard served by `agentcore serve` (no build step).
+  no-build web app (plain HTML/CSS/ES modules) served by `agentcore serve`.
+- **Web app extras** - multi-user accounts, persistent sessions in a database, eval runs across
+  several models side by side, trace retention policies.
 - **More provider adapters** - only Ollama (native API) and OpenAI-compatible HTTP are built in.
 - **Container/WASM tool sandboxes** - only the subprocess sandbox exists; shell and SQL tools are not
   included.

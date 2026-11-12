@@ -1,6 +1,7 @@
-# AgentCore API + trace dashboard.
+# AgentCore web app + agent API (OpenAI-compatible /v1/chat/completions included).
 #   docker build -t agentcore .
 #   docker run -p 8000:8000 -e AGENTCORE_MODEL=mock agentcore
+#   (set -e AGENTCORE_API_KEY=... before exposing it beyond localhost)
 FROM python:3.12-slim AS build
 COPY --from=ghcr.io/astral-sh/uv:0.12.10 /uv /usr/local/bin/uv
 WORKDIR /app
@@ -10,6 +11,9 @@ COPY src ./src
 RUN uv sync --frozen --no-dev --no-editable --extra server
 
 FROM python:3.12-slim
+LABEL org.opencontainers.image.source="https://github.com/Manas-thakur/agentcore" \
+      org.opencontainers.image.description="AgentCore web app, agent API and OpenAI-compatible endpoint" \
+      org.opencontainers.image.licenses="MIT"
 WORKDIR /app
 RUN useradd --create-home --uid 1000 agent
 COPY --from=build /app /app

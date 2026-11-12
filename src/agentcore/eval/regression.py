@@ -37,6 +37,28 @@ class EvalDiff:
     def has_regressions(self) -> bool:
         return bool(self.regressions or self.new_failures)
 
+    def to_dict(self) -> dict[str, Any]:
+        def ch(c: Change) -> dict[str, Any]:
+            return {
+                "case": c.case,
+                "metric": c.metric,
+                "baseline": c.baseline,
+                "current": c.current,
+                "delta": round(c.delta, 4),
+            }
+
+        return {
+            "has_regressions": self.has_regressions,
+            "regressions": [ch(c) for c in self.regressions],
+            "improvements": [ch(c) for c in self.improvements],
+            "new_failures": list(self.new_failures),
+            "fixed": list(self.fixed),
+            "missing_cases": list(self.missing_cases),
+            "new_cases": list(self.new_cases),
+            "baseline_pass_rate": self.baseline_pass_rate,
+            "current_pass_rate": self.current_pass_rate,
+        }
+
     def to_markdown(self) -> str:
         lines = [
             "## Regression check",

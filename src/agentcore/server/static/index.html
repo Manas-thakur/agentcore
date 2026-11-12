@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AgentCore</title>
+  <meta name="description" content="AgentCore: chat with your agent, inspect traces, run evals." />
+  <meta name="color-scheme" content="light dark" />
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600&display=swap" />
+  <link rel="stylesheet" href="/static/app.css?v={{version}}" />
+  <script>
+    // Apply the saved theme before first paint (no flash).
+    try {
+      var t = localStorage.getItem("agentcore.theme");
+      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+    } catch (e) {}
+  </script>
+</head>
+<body>
+  <a class="skip" href="#view">Skip to content</a>
+  <div class="shell">
+    <header class="topbar">
+      <button class="icon-btn" id="menu-btn" type="button" aria-label="Open navigation" aria-controls="rail" aria-expanded="false"></button>
+      <a class="brand brand--top" href="#/playground" aria-label="AgentCore home"><span class="brand-mark" aria-hidden="true"></span>AgentCore</a>
+      <button class="icon-btn theme-btn" type="button" aria-label="Toggle colour theme"></button>
+    </header>
+
+    <aside class="rail" id="rail" aria-label="Primary">
+      <a class="brand" href="#/playground"><span class="brand-mark" aria-hidden="true"></span>AgentCore<span class="brand-ver">v{{version}}</span></a>
+      <nav class="nav" id="nav"></nav>
+      <div class="rail-foot">
+        <div class="server" id="server-status" title="Server status">
+          <span class="dot" aria-hidden="true"></span><span class="server-text">connecting...</span>
+        </div>
+        <button class="theme-toggle theme-btn" type="button" aria-label="Toggle colour theme"></button>
+      </div>
+    </aside>
+    <div class="scrim" id="scrim" hidden></div>
+
+    <main id="view" class="view" tabindex="-1" aria-live="polite"></main>
+  </div>
+
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+  <dialog class="dialog" id="auth-dialog" aria-labelledby="auth-title">
+    <form method="dialog" class="dialog-body" id="auth-form">
+      <h2 id="auth-title">API key required</h2>
+      <p class="muted">This server was started with <code>AGENTCORE_API_KEY</code>. Enter the key once; it is kept in this browser's local storage and sent as a bearer token.</p>
+      <label class="field">
+        <span class="label">API key</span>
+        <input type="password" name="key" id="auth-key" autocomplete="off" required spellcheck="false" />
+      </label>
+      <p class="field-error" id="auth-error" hidden></p>
+      <div class="dialog-actions">
+        <button class="btn" value="cancel" type="button" id="auth-cancel">Cancel</button>
+        <button class="btn btn--primary" value="ok" type="submit">Save key</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="/static/js/app.js?v={{version}}"></script>
+</body>
+</html>

@@ -1,0 +1,158 @@
+name: Release
+
+# Push a tag like v0.2.0 to build the sdist + wheel, publish a GitHub Release with them,
+# push a Docker image to ghcr.io/manas-thakur/agentcore and (optionally) publish to PyPI.
+#
+# PyPI publishing uses trusted publishing (OIDC, no API token). It is skipped until you
+# configure it: create the "pypi" environment + trusted publisher on PyPI, then set the
+# repository variable PYPI_PUBLISH=true (Settings > Secrets and variables > Actions > Variables).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build, e.g. v0.2.0"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/manas-thakur/agentcore
+
+jobs:
+  build:
+    name: Test and build distributions
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Check the tag matches the package version
+        id: version
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)"
+          echo "tag=$TAG version=$VERSION"
+          test "$TAG" = "v$VERSION" || { echo "::error::tag $TAG does not match pyproject version $VERSION"; exit 1; }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Install
+        run: uv sync --all-extras --python 3.12
+      - name: Lint and test
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run pytest -q
+          uv run agentcore eval --suite examples/evals/calculator_suite.yaml --model mock
+      - name: Build sdist and wheel
+        run: uv build
+      - name: Smoke-test the wheel in a clean environment
+        run: |
+          uv venv /tmp/wheel-env --python 3.12
+          uv pip install --python /tmp/wheel-env/bin/python "$(ls dist/*.whl)[server]"
+          /tmp/wheel-env/bin/agentcore --version
+          /tmp/wheel-env/bin/agentcore init /tmp/smoke
+          cd /tmp/smoke
+          /tmp/wheel-env/bin/python agent.py --model mock
+          /tmp/wheel-env/bin/agentcore eval --suite evals/basic.yaml --model mock
+          /tmp/wheel-env/bin/python -c "import agentcore.server.app as a; assert (a.STATIC_DIR / 'index.html').exists()"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  github-release:
+    name: GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          VERSION="${{ needs.build.outputs.version }}"
+          awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          test -s release-notes.md || echo "Release v$VERSION" > release-notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: AgentCore v${{ needs.build.outputs.version }}
+          body_path: release-notes.md
+          files: dist/*
+          fail_on_unmatched_files: true
+
+  docker:
+    name: Docker image (ghcr.io)
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}},value=v${{ needs.build.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=v${{ needs.build.outputs.version }}
+            type=raw,value=latest
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  pypi:
+    name: Publish to PyPI
+    needs: build
+    if: vars.PYPI_PUBLISH == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/agentcore/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

@@ -158,11 +158,16 @@ class EvalReport:
         return "\n".join(out)
 
 
-def default_agent_factory(model: ModelClient, case: EvalCase, suite: EvalSuite) -> Agent:
-    from agentcore.tools.builtins import builtin_tools
+def default_agent_factory(
+    model: ModelClient,
+    case: EvalCase,
+    suite: EvalSuite,
+    extra_tools: dict[str, Any] | None = None,
+) -> Agent:
+    from agentcore.config import resolve_tools
 
     spec = suite.agent
-    tools = builtin_tools(spec.tools) if spec.tools else []
+    tools = resolve_tools(spec.tools, extra=extra_tools) if spec.tools else []
     kwargs: dict[str, Any] = {"max_steps": spec.max_steps, "temperature": spec.temperature}
     return Agent(
         model, tools=tools, system_prompt=spec.system_prompt, name=f"eval:{case.name}", **kwargs
@@ -187,9 +192,11 @@ class EvalRunner:
         record_to: str | Path | None = None,
         replay_from: str | Path | None = None,
         strict_replay: bool = False,
+        tools: dict[str, Any] | None = None,
     ):
         self._model = model
-        self.agent_factory = agent_factory or default_agent_factory
+        self.extra_tools = dict(tools or {})
+        self.agent_factory = agent_factory or self._default_factory
         self.metrics = list(metrics) if metrics is not None else list(DEFAULT_METRICS)
         if judge is not None:
             self.metrics.append(LLMAsJudge(judge))
@@ -199,6 +206,9 @@ class EvalRunner:
         self.strict_replay = strict_replay
         self._recorded: dict[str, list[dict[str, Any]]] = {}
         self._resolved: ModelClient | Callable[[], ModelClient] | None = None
+
+    def _default_factory(self, model: ModelClient, case: EvalCase, suite: EvalSuite) -> Agent:
+        return default_agent_factory(model, case, suite, self.extra_tools)
 
     def _resolve(self, suite: EvalSuite) -> ModelClient | Callable[[], ModelClient] | None:
         """Resolve the model spec once per suite (so ``auto`` probes Ollama only once)."""
@@ -246,13 +256,21 @@ class EvalRunner:
             run.metrics = [await m.evaluate(case, run) for m in self.metrics if m.applies_to(case)]
         return run
 
-    async def run_suite(self, suite: EvalSuite) -> EvalReport:
+    async def run_suite(
+        self, suite: EvalSuite, on_result: Callable[[EvalRun], Any] | None = None
+    ) -> EvalReport:
+        """Run every case. ``on_result`` (sync or async) is called as each case finishes."""
         self._resolved = self._resolve(suite)
         sem = asyncio.Semaphore(self.concurrency)
 
         async def guarded(case: EvalCase) -> EvalRun:
             async with sem:
-                return await self.run_case(case, suite)
+                result = await self.run_case(case, suite)
+            if on_result is not None:
+                res = on_result(result)
+                if asyncio.iscoroutine(res):
+                    await res
+            return result
 
         runs = await asyncio.gather(*(guarded(c) for c in suite.cases))
         label = self.model_label(suite)

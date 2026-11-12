@@ -34,6 +34,16 @@ jobs:
           uv run python examples/rag_qa.py --model mock
           uv run python examples/workflow_graph.py
           uv run python examples/multi_agent.py --model mock
+      - name: Scaffold smoke test (agentcore init)
+        run: |
+          uv run agentcore init "$RUNNER_TEMP/smoke"
+          cd "$RUNNER_TEMP/smoke"
+          uv run --project "$GITHUB_WORKSPACE" python agent.py --model mock
+          uv run --project "$GITHUB_WORKSPACE" agentcore eval --suite evals/basic.yaml --model mock
+          uv run --project "$GITHUB_WORKSPACE" agentcore doctor --model mock
+      - name: Build sdist + wheel
+        if: matrix.python-version == '3.12'
+        run: uv build
       - name: Eval summary
         if: always() && matrix.python-version == '3.12'
         run: test -f eval-report.md && cat eval-report.md >> "$GITHUB_STEP_SUMMARY" || true

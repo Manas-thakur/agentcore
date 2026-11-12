@@ -9,14 +9,24 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import re
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from agentcore.runtime.model_client import ModelClient, ModelError, ToolSpecs
-from agentcore.types import ChatResponse, Message, ToolCall, Usage
+from agentcore.types import (
+    ChatResponse,
+    DoneEvent,
+    Message,
+    StreamEvent,
+    TokenEvent,
+    ToolCall,
+    ToolCallEvent,
+    Usage,
+)
 
 ScriptItem = str | Message | ChatResponse | Callable[..., Any]
 
@@ -233,9 +243,10 @@ class MockModel(ModelClient):
 
     provider = "mock"
 
-    def __init__(self, model: str = "mock", *, latency_ms: float = 0.0):
+    def __init__(self, model: str = "mock", *, latency_ms: float = 0.0, stream_delay: float = 0.0):
         super().__init__(model)
         self.latency_ms = latency_ms
+        self.stream_delay = stream_delay  # seconds between streamed chunks (demo realism)
 
     @property
     def model_id(self) -> str:
@@ -261,6 +272,24 @@ class MockModel(ModelClient):
             latency_ms=self.latency_ms or (time.perf_counter() - start) * 1000,
             finish_reason="tool_calls" if msg.tool_calls else "stop",
         )
+
+    async def stream(
+        self,
+        messages: list[Message],
+        tools: ToolSpecs | None = None,
+        *,
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[StreamEvent]:
+        """Stream the deterministic answer word by word (joined chunks == ``generate``)."""
+        resp = await self.generate(messages, tools, temperature=temperature, max_tokens=max_tokens)
+        for chunk in re.findall(r"\S+\s*|\s+", resp.content):
+            if self.stream_delay:
+                await asyncio.sleep(self.stream_delay)
+            yield TokenEvent(chunk)
+        for tc in resp.tool_calls:
+            yield ToolCallEvent(tc)
+        yield DoneEvent(resp)
 
     # The policy ---------------------------------------------------------------
     def respond(self, messages: list[Message], tools: ToolSpecs | None) -> Message:
@@ -289,8 +318,18 @@ class MockModel(ModelClient):
                 return Message.assistant(f"The answer is {safe_eval(expr)}.")
             except (ValueError, ZeroDivisionError, OverflowError):
                 pass
-        snippet = " ".join(task.split())[:300]
-        return Message.assistant(f"[mock] I received: {snippet}" if snippet else "[mock] Hello!")
+        snippet = " ".join(task.split())
+        if not snippet:
+            return Message.assistant("[mock] Hello!")
+        if len(snippet) > 80:
+            snippet = snippet[:77] + "..."
+        return Message.assistant(
+            f"[mock] I can't answer \"{snippet}\" because I'm the offline mock model: "
+            "I only do arithmetic, call simple tools like the calculator, and quote "
+            "from sources you give me. For real answers, start AgentCore with a model, "
+            "for example `agentcore serve --model ollama:qwen2.5:7b`, or set "
+            "`OPENAI_BASE_URL` and use `--model openai:<name>`."
+        )
 
     def _choose_tool(self, task: str, available: dict[str, dict[str, Any]]) -> ToolCall | None:
         if not available or not task.strip():

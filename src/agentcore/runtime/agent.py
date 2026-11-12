@@ -48,6 +48,7 @@ class AgentConfig:
     timeout_seconds: float | None = None
     context_window: int | None = None  # enable ContextManager truncation when set
     max_tool_output_tokens: int = 2000
+    trace_content: bool = True  # record model inputs/outputs (truncated) on model.generate spans
 
 
 @dataclass
@@ -230,6 +231,14 @@ class Agent:
             cost = estimate_cost(
                 self.model.model_id, resp.usage.prompt_tokens, resp.usage.completion_tokens
             )
+            if self.config.trace_content:
+                span.set_attributes(
+                    {
+                        "input.messages": _trace_messages(messages),
+                        "output.content": resp.content[:TRACE_TEXT_LIMIT],
+                        "output.tool_calls": [tc.to_dict() for tc in resp.tool_calls],
+                    }
+                )
             span.set_attributes(
                 {
                     "tokens.prompt": resp.usage.prompt_tokens,
@@ -522,6 +531,33 @@ class Agent:
             category="agents",
             timeout=None,
         )
+
+
+TRACE_TEXT_LIMIT = 4000
+TRACE_MAX_MESSAGES = 40
+
+
+def _trace_messages(messages: list[Message]) -> list[dict[str, Any]]:
+    """A compact, size-bounded copy of the prompt for trace inspection."""
+    out = []
+    for m in messages[-TRACE_MAX_MESSAGES:]:
+        d: dict[str, Any] = {"role": m.role, "content": m.content[:TRACE_TEXT_LIMIT]}
+        if len(m.content) > TRACE_TEXT_LIMIT:
+            d["truncated"] = len(m.content) - TRACE_TEXT_LIMIT
+        if m.tool_calls:
+            d["tool_calls"] = [tc.to_dict() for tc in m.tool_calls]
+        if m.name:
+            d["name"] = m.name
+        out.append(d)
+    if len(messages) > TRACE_MAX_MESSAGES:
+        out.insert(
+            0,
+            {
+                "role": "note",
+                "content": f"{len(messages) - TRACE_MAX_MESSAGES} earlier messages omitted",
+            },
+        )
+    return out
 
 
 def _call_key(tc: ToolCall) -> str:

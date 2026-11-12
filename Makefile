@@ -1,7 +1,7 @@
 # Developer shortcuts. Windows users without `make` can run the commands directly.
 MODEL ?= mock
 
-.PHONY: install test lint format eval examples serve docker clean check
+.PHONY: install test lint format eval examples serve doctor build docker clean check
 
 check: lint test eval
 
@@ -30,6 +30,12 @@ examples:
 
 serve:
 	uv run agentcore serve --model $(MODEL)
+
+doctor:
+	uv run agentcore doctor --model $(MODEL)
+
+build:
+	uv build
 
 docker:
 	docker compose up --build

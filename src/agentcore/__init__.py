@@ -13,7 +13,7 @@ from agentcore.runtime import Agent, AgentConfig, AgentResult, create_model
 from agentcore.tools import Tool, ToolRegistry, tool
 from agentcore.types import ChatResponse, Message, ToolCall, Usage
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "Agent",

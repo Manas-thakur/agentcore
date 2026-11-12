@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +23,13 @@ class TraceSummary:
     total_tokens: int
     cost_usd: float
     attributes: dict[str, Any]
+    model: str = ""
+    input: str = ""
+    output: str = ""
+    tool_calls: int = 0
+    tool_errors: int = 0
+    error: str | None = None
+    tools: dict[str, dict[str, float]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return self.__dict__.copy()
@@ -34,6 +41,7 @@ class JSONLTraceStore:
     def __init__(self, root: str | os.PathLike[str] = ".agentcore/traces"):
         self.root = Path(root)
         self._lock = threading.Lock()
+        self._cache: dict[str, tuple[float, int, TraceSummary]] = {}
 
     # exporter protocol
     def export(self, span: Span) -> None:
@@ -70,6 +78,21 @@ class JSONLTraceStore:
         return spans
 
     def summarize(self, trace_id: str) -> TraceSummary | None:
+        """Summarize one trace (cached by file mtime/size, so listing stays cheap)."""
+        path = self.root / f"{trace_id}.jsonl"
+        try:
+            st = path.stat()
+        except OSError:
+            return None
+        cached = self._cache.get(trace_id)
+        if cached and cached[0] == st.st_mtime and cached[1] == st.st_size:
+            return cached[2]
+        summary = self._summarize(trace_id)
+        if summary is not None:
+            self._cache[trace_id] = (st.st_mtime, st.st_size, summary)
+        return summary
+
+    def _summarize(self, trace_id: str) -> TraceSummary | None:
         spans = self.load(trace_id)
         if not spans:
             return None
@@ -83,21 +106,44 @@ class JSONLTraceStore:
         cost = sum(
             float(s.attributes.get("cost.usd", 0.0)) for s in spans if s.name == "model.generate"
         )
+        model = str(root.attributes.get("model") or "")
+        if not model:
+            model = next(
+                (str(s.attributes["model"]) for s in spans if s.attributes.get("model")), ""
+            )
+        tools: dict[str, dict[str, float]] = {}
+        for s in spans:
+            if s.name != "tool.execute":
+                continue
+            name = str(s.attributes.get("tool.name", "?"))
+            t = tools.setdefault(name, {"calls": 0, "errors": 0, "total_ms": 0.0})
+            t["calls"] += 1
+            t["errors"] += 0 if s.status == "ok" else 1
+            t["total_ms"] += s.duration_ms
+        error_span = next((s for s in roots if s.status == "error"), None)
         return TraceSummary(
             trace_id=trace_id,
             name=root.name,
             start_time=start,
             duration_ms=(end - start) * 1000,
             span_count=len(spans),
-            status="error" if any(s.status == "error" for s in roots) else "ok",
+            status="error" if error_span is not None else "ok",
             total_tokens=tokens,
             cost_usd=round(cost, 6),
             attributes=root.attributes,
+            model=model,
+            input=str(root.attributes.get("task", ""))[:500],
+            output=str(root.attributes.get("output", ""))[:500],
+            tool_calls=int(sum(t["calls"] for t in tools.values())),
+            tool_errors=int(sum(t["errors"] for t in tools.values())),
+            error=error_span.error if error_span is not None else None,
+            tools=tools,
         )
 
-    def list(self, limit: int = 20) -> list[TraceSummary]:
+    def list(self, limit: int | None = 20) -> list[TraceSummary]:
         out = []
-        for tid in self.trace_ids()[:limit]:
+        ids = self.trace_ids()
+        for tid in ids if limit is None else ids[:limit]:
             s = self.summarize(tid)
             if s:
                 out.append(s)

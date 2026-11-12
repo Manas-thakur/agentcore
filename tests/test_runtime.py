@@ -158,6 +158,7 @@ def test_mock_model_policy():
     assert find_math_expression("no math here") is None
     plain = Agent(MockModel()).run_sync("hello there")
     assert plain.output.startswith("[mock]")
+    assert "offline mock model" in plain.output and "--model" in plain.output
     answer = extractive_answer(
         "what is bm25",
         {
