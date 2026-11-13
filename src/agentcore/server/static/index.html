@@ -9,7 +9,7 @@
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600&display=swap" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" />
   <link rel="stylesheet" href="/static/app.css?v={{version}}" />
   <script>
     // Apply the saved theme before first paint (no flash).
@@ -25,25 +25,52 @@
     <header class="topbar">
       <button class="icon-btn" id="menu-btn" type="button" aria-label="Open navigation" aria-controls="rail" aria-expanded="false"></button>
       <a class="brand brand--top" href="#/playground" aria-label="AgentCore home"><span class="brand-mark" aria-hidden="true"></span>AgentCore</a>
+      <button class="icon-btn palette-btn" type="button" aria-label="Search and commands" data-palette></button>
       <button class="icon-btn theme-btn" type="button" aria-label="Toggle colour theme"></button>
     </header>
 
     <aside class="rail" id="rail" aria-label="Primary">
       <a class="brand" href="#/playground"><span class="brand-mark" aria-hidden="true"></span>AgentCore<span class="brand-ver">v{{version}}</span></a>
-      <nav class="nav" id="nav"></nav>
+      <button class="jump" type="button" data-palette aria-keyshortcuts="Control+K Meta+K">
+        <span class="jump-icon" aria-hidden="true"></span><span class="jump-text">Search</span><kbd class="kbd-hint" aria-hidden="true">Ctrl K</kbd>
+      </button>
+      <nav class="nav" id="nav" aria-label="Views"></nav>
       <div class="rail-foot">
-        <div class="server" id="server-status" title="Server status">
-          <span class="dot" aria-hidden="true"></span><span class="server-text">connecting...</span>
+        <a class="nav-link" href="#/settings" data-route="settings" id="nav-settings"></a>
+        <button class="nav-link" type="button" id="shortcuts-btn" aria-keyshortcuts="Shift+?"></button>
+        <div class="rail-status">
+          <div class="server" id="server-status" title="Server status">
+            <span class="dot" aria-hidden="true"></span><span class="server-text">connecting...</span>
+          </div>
+          <button class="icon-btn icon-btn--sm theme-toggle theme-btn" type="button" aria-label="Toggle colour theme"></button>
         </div>
-        <button class="theme-toggle theme-btn" type="button" aria-label="Toggle colour theme"></button>
       </div>
     </aside>
     <div class="scrim" id="scrim" hidden></div>
 
-    <main id="view" class="view" tabindex="-1" aria-live="polite"></main>
+    <main id="view" class="view" tabindex="-1"></main>
   </div>
 
   <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+  <dialog class="dialog palette" id="palette" aria-label="Command palette">
+    <div class="palette-inner">
+      <div class="palette-search">
+        <span class="palette-icon" aria-hidden="true"></span>
+        <input id="palette-input" type="text" role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="Type a command, view, trace id or eval suite..." aria-label="Command" />
+        <kbd class="kbd-hint" aria-hidden="true">Esc</kbd>
+      </div>
+      <ul class="palette-list" id="palette-list" role="listbox" aria-label="Results"></ul>
+      <div class="palette-foot" aria-hidden="true"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>Enter</kbd> run</span><span><kbd>?</kbd> shortcuts</span></div>
+    </div>
+  </dialog>
+
+  <dialog class="dialog shortcuts" id="shortcuts" aria-labelledby="shortcuts-title">
+    <div class="dialog-body">
+      <div class="dialog-head"><h2 id="shortcuts-title">Keyboard shortcuts</h2><button class="icon-btn icon-btn--sm" type="button" id="shortcuts-close" aria-label="Close"></button></div>
+      <div class="shortcut-groups" id="shortcut-groups"></div>
+    </div>
+  </dialog>
 
   <dialog class="dialog" id="auth-dialog" aria-labelledby="auth-title">
     <form method="dialog" class="dialog-body" id="auth-form">

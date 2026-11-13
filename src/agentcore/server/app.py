@@ -10,10 +10,11 @@ Endpoints (see the README "HTTP API" section for request/response shapes):
 * ``POST /api/chat``                      - streaming chat turn (Server-Sent Events)
 * ``GET|POST /api/sessions``, ``GET|DELETE /api/sessions/{id}``, ``POST .../stop``
 * ``GET  /api/traces``, ``/api/traces/facets``, ``/api/traces/{id}``, ``/api/traces/{id}/export``
+* ``GET  /api/traces/explore``           - query language, facet counts, histogram (explorer)
 * ``GET  /api/overview``                  - KPIs, time series, top tools
 * ``GET  /api/tools``, ``POST /api/tools/{name}/invoke``
 * ``GET  /api/evals/suites``, ``GET|POST /api/evals/runs``, ``GET /api/evals/runs/{id}``,
-  ``POST /api/evals/runs/{id}/baseline``
+  ``POST /api/evals/runs/{id}/baseline``, ``GET /api/evals/matrix`` (cases x recent runs)
 * ``GET  /api/config``                    - effective server configuration (no secrets)
 * ``GET  /metrics``                       - Prometheus text format
 """
@@ -40,7 +41,7 @@ from agentcore.config import (
 from agentcore.obs.cost import estimate_cost
 from agentcore.obs.metrics import get_metrics
 from agentcore.obs.storage import JSONLTraceStore
-from agentcore.obs.tracing import configure_tracing, current_trace_id, get_tracer
+from agentcore.obs.tracing import configure_tracing, current_span, current_trace_id, get_tracer
 from agentcore.runtime.agent import Agent, AgentEvent
 from agentcore.runtime.model_client import ModelClient
 from agentcore.runtime.providers import MockModel, create_model
@@ -142,8 +143,15 @@ def create_app(
         raise RuntimeError(
             "the server needs the 'server' extra: pip install 'agentcore[server]'"
         ) from exc
-    from agentcore.server.analytics import filter_traces, overview, parse_time
+    from agentcore.server.analytics import (
+        explore,
+        facet_counts,
+        filter_traces,
+        overview,
+        parse_time,
+    )
     from agentcore.server.evals import EvalManager
+    from agentcore.server.query import QueryError, parse_query
     from agentcore.server.security import APIKeyMiddleware, BodySizeLimitMiddleware
     from agentcore.server.sessions import SessionStore, valid_session_id
 
@@ -415,12 +423,17 @@ def create_app(
         }
 
     # --- streaming chat with sessions -----------------------------------------------------
-    def run_in_background(agent: Agent, task: Any) -> tuple[asyncio.Task[Any], asyncio.Queue]:
+    def run_in_background(
+        agent: Agent, task: Any, span_attrs: dict[str, Any] | None = None
+    ) -> tuple[asyncio.Task[Any], asyncio.Queue]:
         queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
 
         async def push(ev: AgentEvent) -> None:
             if ev.type == "run_start":
                 ev.data["trace_id"] = current_trace_id()
+                root = current_span()
+                if root is not None and span_attrs:
+                    root.set_attributes(span_attrs)  # e.g. session.id, for trace filters
             await queue.put(ev)
 
         async def runner() -> Any:
@@ -459,8 +472,14 @@ def create_app(
         }
         if not session.turns:
             session.title = " ".join(req.message.split())[:60] or "New chat"
+        # What the model gets besides the new message (shown as "added to context" chips).
+        context = {
+            "tools": [t.name for t in tl],
+            "system_prompt": "custom" if system_prompt else "default",
+            "memory_messages": len(session.memory.get_messages()),
+        }
         session.turns.append({"role": "user", "content": req.message, "ts": time.time()})
-        task, queue = run_in_background(agent, req.message)
+        task, queue = run_in_background(agent, req.message, {"session.id": session.id})
         session.task = task
         sessions.save(session)
 
@@ -471,11 +490,18 @@ def create_app(
                 "parts": [],
                 "model": mdl.model_id,
                 "status": "running",
+                "context": context,
                 "ts": time.time(),
             }
             parts: list[dict[str, Any]] = turn["parts"]
             yield sse(
-                "session", {"session_id": session.id, "title": session.title, "model": mdl.model_id}
+                "session",
+                {
+                    "session_id": session.id,
+                    "title": session.title,
+                    "model": mdl.model_id,
+                    "context": context,
+                },
             )
             try:
                 while True:
@@ -494,6 +520,16 @@ def create_app(
                                 {"type": "text", "step": ev.step, "content": ev.data["content"]}
                             )
                     elif ev.type == "model_response":
+                        usage_d = ev.data.get("usage") or {}
+                        parts.append(
+                            {
+                                "type": "model",
+                                "step": ev.step,
+                                "latency_ms": round(float(ev.data.get("latency_ms") or 0), 2),
+                                "tokens": usage_d.get("total_tokens", 0),
+                                "tool_calls": len(ev.data.get("tool_calls") or []),
+                            }
+                        )
                         has_text = any(
                             p["type"] == "text" and p.get("step") == ev.step for p in parts
                         )
@@ -746,6 +782,9 @@ def create_app(
         kind: str | None = None,
         since: str | None = None,
         until: str | None = None,
+        query: str | None = Query(None, max_length=2000, description="explorer query language"),
+        sort: str = "time",
+        order: str = "desc",
     ) -> Response:
         try:
             items = filter_traces(
@@ -756,6 +795,9 @@ def create_app(
                 kind=kind,
                 since=parse_time(since),
                 until=parse_time(until),
+                query=query,
+                sort=sort,
+                order=order,
             )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
@@ -763,13 +805,50 @@ def create_app(
         return JSONResponse(page, headers={"X-Total-Count": str(len(items))})
 
     @app.get("/api/traces/facets")
-    def trace_facets() -> dict[str, Any]:
+    def trace_facets(query: str | None = Query(None, max_length=2000)) -> dict[str, Any]:
         items = store.list(None)
+        try:
+            tq = parse_query(query)
+        except QueryError as exc:
+            raise HTTPException(400, str(exc)) from exc
         return {
             "count": len(items),
             "models": sorted({s.model for s in items if s.model}),
             "names": sorted({s.name for s in items}),
+            "facets": facet_counts(items, tq),
         }
+
+    @app.get("/api/traces/explore")
+    def trace_explore(
+        query: str | None = Query(None, max_length=2000),
+        since: str | None = None,
+        until: str | None = None,
+        sort: str = "time",
+        order: str = "desc",
+        limit: int = Query(100, ge=1, le=1000),
+        offset: int = Query(0, ge=0),
+        buckets: int = Query(48, ge=4, le=200),
+    ) -> Any:
+        """Rows, total, facet counts, histogram and percentiles for the trace explorer."""
+        try:
+            return explore(
+                store,
+                query=query,
+                since=parse_time(since),
+                until=parse_time(until),
+                sort=sort,
+                order=order,
+                limit=limit,
+                offset=offset,
+                buckets=buckets,
+            )
+        except QueryError as exc:
+            return JSONResponse(
+                {"detail": str(exc), "position": exc.position, "type": "query_error"},
+                status_code=400,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     def load_trace(trace_id: str) -> tuple[str, list[Any]]:
         resolved = store.resolve(trace_id)
@@ -880,6 +959,11 @@ def create_app(
             if j.status in ("queued", "running") and (suite is None or j.suite == suite)
         ]
         return active + evals.history(suite, limit=limit)
+
+    @app.get("/api/evals/matrix")
+    def eval_matrix(suite: str, limit: int = Query(8, ge=1, le=30)) -> dict[str, Any]:
+        """Cases (rows) x the most recent completed runs (columns) of one suite."""
+        return evals.matrix(suite, limit=limit)
 
     @app.get("/api/evals/runs/{run_id}")
     def eval_run(run_id: str) -> dict[str, Any]:

@@ -34,6 +34,7 @@ class EvalRun:
     usage: Usage = field(default_factory=Usage)
     duration_ms: float = 0.0
     error: str | None = None
+    trace_id: str | None = None
 
     @property
     def passed(self) -> bool:
@@ -60,6 +61,7 @@ class EvalRun:
             "duration_ms": round(self.duration_ms, 2),
             "error": self.error,
             "trajectory": self.trajectory.to_dict(),
+            "trace_id": self.trace_id,
         }
 
 
@@ -246,6 +248,7 @@ class EvalRunner:
             run.stop_reason = result.stop_reason
             run.usage = result.usage
             run.error = result.error
+            run.trace_id = result.trace_id
         except Exception as exc:  # a crashing agent is a failed case, not a crashed suite
             run.error = f"{type(exc).__name__}: {exc}"
         run.duration_ms = (time.perf_counter() - start) * 1000

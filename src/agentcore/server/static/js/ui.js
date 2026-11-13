@@ -59,6 +59,22 @@ const P = {
   refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/>',
   external: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/>',
+  x: '<path d="M6 6l12 12M18 6 6 18"/>',
+  filter: '<path d="M4 5h16l-6 7.5V19l-4-2v-4.5z"/>',
+  down: '<path d="m6 9 6 6 6-6"/>',
+  up: '<path d="m6 15 6-6 6 6"/>',
+  keyboard: '<rect x="2.5" y="6" width="19" height="12" rx="1.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>',
+  help: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6M12 17h.01"/>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  bolt: '<path d="M13 3 5 13.5h6L10 21l8-10.5h-6z"/>',
+  coin: '<circle cx="12" cy="12" r="8.5"/><path d="M14.5 9.2c-.5-.8-1.4-1.2-2.5-1.2-1.5 0-2.5.8-2.5 2s1 1.7 2.5 2 2.5.8 2.5 2-1 2-2.5 2c-1.1 0-2-.4-2.5-1.2M12 6.5v1.5M12 16v1.5"/>',
+  alert: '<path d="M12 4 2.8 19.5h18.4z"/><path d="M12 10v4M12 17h.01"/>',
+  panel: '<rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M15 4v16"/>',
+  layers: '<path d="m12 4 9 5-9 5-9-5z"/><path d="m3 14 9 5 9-5"/>',
+  minus: '<path d="M5 12h14"/>',
+  dot: '<circle cx="12" cy="12" r="3"/>',
 };
 
 export function icon(name, cls = "") {
@@ -187,7 +203,7 @@ export function chip(text, kind = "") {
 
 export function statusDot(status) {
   const ok = status === "ok";
-  return h("span", { class: `status-dot ${ok ? "ok" : "err"}` }, h("span", { class: "dot" }), h("span", { class: "txt" }, ok ? "ok" : "error"));
+  return h("span", { class: `status-dot ${ok ? "ok" : "err"}` }, h("span", { class: "dot", "aria-hidden": "true" }), h("span", { class: "txt" }, ok ? "ok" : "error"));
 }
 
 // --- toasts -----------------------------------------------------------------------------
@@ -231,6 +247,31 @@ export const store = {
     }
   },
 };
+
+// True when a keystroke belongs to a text field (single-key shortcuts must not fire).
+export function isTyping(ev) {
+  const t = ev.target;
+  if (!t || !(t instanceof Element)) return false;
+  if (t.isContentEditable) return true;
+  const tag = t.tagName;
+  if (tag === "TEXTAREA" || tag === "SELECT") return true;
+  if (tag === "INPUT") return !["checkbox", "radio", "button", "submit", "range"].includes(t.type);
+  return false;
+}
+
+export const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+export const modKey = isMac ? "⌘" : "Ctrl";
+
+export function plural(n, word, many) {
+  return `${n} ${n === 1 ? word : many || `${word}s`}`;
+}
+
+// Relative change between two numbers for "vs previous period" deltas (null when unknown).
+export function pctChange(cur, prev) {
+  if (prev === null || prev === undefined || cur === null || cur === undefined) return null;
+  if (prev === 0) return cur === 0 ? 0 : null;
+  return (cur - prev) / Math.abs(prev);
+}
 
 export function debounce(fn, ms = 250) {
   let t;

@@ -15,15 +15,18 @@ Everything runs **offline** out of the box: a deterministic rule-based `mock` mo
 examples, tests and CI. Point the same code at a local model (Ollama) or any OpenAI-compatible
 server (OpenAI, vLLM, LM Studio, Groq, llama.cpp, ...) by changing one flag.
 
-`agentcore serve` adds a web app (streaming chat playground, trace waterfalls, eval runs with
-baselines, an overview of latency/tokens/cost, a tool tester) and an **OpenAI-compatible
+`agentcore serve` adds a web app (streaming chat playground with run summaries, a trace explorer
+with a query language, facets and a span-tree side peek, an eval results matrix with baselines,
+an overview of latency/tokens/cost, a tool tester) and an **OpenAI-compatible
 `/v1/chat/completions` endpoint** backed by the agent, so existing OpenAI clients can talk to it.
 
-| Playground | Trace waterfall |
+| Playground | Traces |
 |---|---|
-| ![Streaming chat with inline tool calls](docs/screenshots/playground.png) | ![Span waterfall with model inputs and outputs](docs/screenshots/trace-waterfall.png) |
+| ![Chat reply with its run summary expanded into a step timeline](docs/screenshots/playground.png) | ![Trace explorer with query bar, facets, histogram and a side peek showing the span tree](docs/screenshots/traces.png) |
 | **Evals** | **Overview** |
-| ![Eval run compared against a baseline](docs/screenshots/evals.png) | ![KPIs and charts over time](docs/screenshots/overview.png) |
+| ![Results matrix of cases by runs with a regression outlined and the case peek open](docs/screenshots/evals.png) | ![KPI cards with sparklines and deltas, latency and volume charts](docs/screenshots/overview.png) |
+
+<sub>Screenshots use the offline mock model plus generated sample traces (including Ollama/OpenAI-style runs) to fill the charts; your dashboard shows your own runs.</sub>
 
 ## Features
 
@@ -422,16 +425,27 @@ show exactly what the model saw; pass `trace_content=False` to `Agent` to turn t
 
 ## Web app
 
-`agentcore serve` serves a no-build web app (plain HTML/CSS/ES modules, no CDN scripts) next to the API:
+`agentcore serve` serves a no-build web app (plain HTML/CSS/ES modules, no CDN scripts) next to the API.
+It is keyboard-first: `Ctrl/Cmd+K` opens a command palette (views, new chat, recent traces, chats,
+run an eval suite, theme), `?` lists every shortcut, `g` + a letter switches views. Light and dark
+themes, and it works down to phone width (filters and side peeks become sheets). The patterns it
+borrows, and why, are written up in [docs/design/references.md](docs/design/references.md).
 
 | Page | What it does |
 |---|---|
-| **Playground** | Multi-turn chat streamed over SSE. Sessions live on the server (memory + transcript, persisted under the state dir). Tool calls render inline as expandable cards with arguments, result, duration and errors. Model picker (from `/v1/models` or free text), per-tool toggles, system prompt, max steps, a Stop button, and a "View trace" link on every answer. Markdown answers are rendered with an escape-first sanitizer. |
-| **Traces** | Search and filter by text, status, model, kind (agent / eval) and date. The detail view shows a nested span waterfall with duration bars, span attributes, model inputs/outputs, tokens and cost, and exports the trace as JSON. |
-| **Evals** | Lists suites from the configured eval dirs, runs one in the background with progress polling, shows per-case scores and metric breakdowns, keeps a run history, and compares each run with a chosen baseline (regressions highlighted). |
-| **Overview** | Runs, success rate, p50/p95 latency, tokens and cost for 24 h / 7 d / 30 d, with charts over time, top tools by calls and errors, and models. |
+| **Playground** | Multi-turn chat streamed over SSE with server-side sessions (memory + transcript, persisted under the state dir). Each reply starts with a collapsible run summary ("Worked for 1.2 s · 2 tool calls · 183 tokens") that expands into a step timeline: model calls, tool calls with arguments and results, timings, and the context the model was given. Run settings (model, tool switches, max steps, system prompt) sit in a collapsible right panel. Stop button, "View trace" on every answer, escape-first Markdown rendering. |
+| **Traces** | An explorer: a query bar (`status:error -model:mock tool:calculator latency:>1s "free text"`) with autocomplete, a facet sidebar with per-value counts, a volume histogram you can drag to zoom, quick filters (Errors, Slow > p95, Expensive) and a dense sortable table. Clicking a row opens a resizable side peek with metadata pills, a nested span tree with latency bars and Preview / Attributes / JSON tabs. `j`/`k` move between traces, `Enter` opens, `Esc` closes; every state is a shareable URL. |
+| **Evals** | Lists suites from the configured eval dirs, runs one in the background with progress, and shows a results matrix of cases x recent runs with regressions outlined. Click a cell for that case's metrics and trajectory in a side peek; pick a column for the run's details and its comparison with the baseline; browse the run history. |
+| **Overview** | KPI cards (runs, success rate, p50/p95 latency, tokens, cost) with sparklines and the change vs the previous period, charts over time for 24 h / 7 d / 30 d, top tools with error rates (linking to their traces), models and recent failures. |
 | **Tools** | Every enabled tool with its JSON Schema and a generated "try it" form (or raw JSON) that invokes it directly; each invocation is traced. |
 | **Settings** | Theme (system / light / dark), the API key stored in this browser, and the server's effective configuration. |
+
+Trace query language (also accepted by `GET /api/traces?query=`): `field:value` clauses and free
+text, all ANDed. Fields: `status` (`ok`/`error`), `model`, `tool`, `name`, `kind`
+(`chat`/`api`/`openai`/`eval`/`tool`), `session`, `id` (prefix), and the numeric `latency`
+(`ms`/`s`/`m`), `tokens`, `cost` (USD), `steps`, `tools` with `>`, `>=`, `<`, `<=`, `=`, `!=`.
+Prefix a clause with `-` to exclude it, use `,` for any-of (`model:mock,ollama:*`), `*` as a
+wildcard, and quotes for text with spaces or colons. Example: `kind:chat -status:ok latency:>2s`.
 
 ## HTTP API
 
@@ -443,12 +457,14 @@ show exactly what the model saw; pass `trace_content=False` to `Agent` to turn t
 | `POST /v1/chat/completions` | OpenAI-compatible; `model` is `agentcore` (server default) or a spec like `mock` / `ollama:<m>`; supports `stream: true` and `stream_options.include_usage`; the agent runs the server's tools; the response adds an `agentcore` object with `trace_id` and tool calls |
 | `POST /api/chat` | Streaming chat turn (SSE). Body: `message`, optional `session_id`, `model`, `tools`, `system_prompt`, `max_steps`. Events: `session`, `run_start` (with `trace_id`), `step_start`, `token`, `model_response`, `tool_start`, `tool_end`, `reflection`, `final`, then `done`, `stopped` or `error` |
 | `GET/POST /api/sessions`, `GET/DELETE /api/sessions/{id}`, `POST /api/sessions/{id}/stop` | Session list/create, transcript + memory, delete, cancel the running turn |
-| `GET /api/traces` | Trace summaries; query `q`, `status`, `model`, `kind=agent\|eval`, `since`, `until` (epoch or ISO), `limit`, `offset`; total in `X-Total-Count` |
-| `GET /api/traces/facets`, `GET /api/traces/{id}`, `GET /api/traces/{id}/export` | Filter values; summary + spans (id or unique prefix); JSON download |
-| `GET /api/overview?days=7` | KPIs, time series, top tools, models, recent failures |
+| `GET /api/traces` | Trace summaries; query `q`, `status`, `model`, `kind=agent\|eval`, `query` (explorer query language), `sort` (`time\|latency\|tokens\|cost\|name\|status\|model`), `order`, `since`, `until` (epoch or ISO), `limit`, `offset`; total in `X-Total-Count` |
+| `GET /api/traces/explore` | Everything the explorer needs in one call: `query`, `since`, `until`, `sort`, `order`, `limit`, `offset`, `buckets` -> rows, total, facet counts, histogram, latency/cost percentiles. An invalid query returns 400 with the parser message |
+| `GET /api/traces/facets`, `GET /api/traces/{id}`, `GET /api/traces/{id}/export` | Filter values and per-value counts (`?query=`); summary + spans (id or unique prefix); JSON download |
+| `GET /api/overview?days=7` | KPIs, the same KPIs for the previous period, time series, top tools with error rates, models, recent failures |
 | `GET /api/tools`, `POST /api/tools/{name}/invoke` | Enabled tools with schemas; invoke with `{"arguments": {...}}` |
 | `GET /api/evals/suites` | Suites discovered in the eval dirs (with last run and baseline) |
 | `POST /api/evals/runs`, `GET /api/evals/runs[?suite=]`, `GET /api/evals/runs/{id}`, `POST /api/evals/runs/{id}/baseline` | Start a background run (`{"suite": path-or-name, "model": ...}` -> 202), history, progress/results with diff vs baseline, set baseline |
+| `GET /api/evals/matrix?suite=&limit=8` | Cases x the last completed runs (oldest first), each cell with pass/score and `regressed` / `baseline_regressed` flags |
 | `GET /api/config` | Effective configuration (never includes secrets) |
 | `GET /metrics` | Prometheus text format |
 | `GET /docs` | Interactive OpenAPI docs |
@@ -584,7 +600,7 @@ agentcore/
 ├── examples/             # runnable demos, sample corpus, eval suite
 ├── tests/                # pytest suite (offline)
 ├── plans/                # original design documents for each component
-├── docs/screenshots/     # README images
+├── docs/                # screenshots/ (README images), design/references.md (UI patterns)
 ├── Dockerfile, docker-compose.yml, Makefile, CHANGELOG.md
 └── .github/workflows/    # ci.yml, release.yml
 ```

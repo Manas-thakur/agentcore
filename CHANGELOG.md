@@ -4,6 +4,34 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **Web app UI/UX rebuild** (still no build step; patterns and rationale in
+  `docs/design/references.md`):
+  - *Traces* is now an explorer: query bar with a small query language and autocomplete, facet
+    sidebar with per-value counts, volume histogram with drag-to-zoom, quick filters (Errors,
+    Slow > p95, Expensive), dense sortable table, and a resizable side peek with metadata pills,
+    a nested span tree with latency bars and Preview / Attributes / JSON tabs. `j`/`k`/`Enter`/`Esc`
+    keyboard navigation; filters, sort, time range and the open trace live in the URL.
+  - *Playground*: each reply starts with a collapsible run summary that expands into a step
+    timeline (model calls, tool calls with arguments and results, "added to context" chips);
+    run settings move to a collapsible right panel with switches and a max-steps slider.
+  - *Evals*: results matrix (cases x recent runs) with regressions outlined and a case side peek
+    showing metrics, trajectory and the case across runs.
+  - *Overview*: KPI cards with sparklines and deltas vs the previous period; tool error rates.
+  - *Shell*: sectioned sidebar, `Ctrl/Cmd+K` command palette, `?` shortcut help, `g`-prefixed
+    navigation, calmer visual system, 375 px layouts with sheets for filters and peeks.
+
+### Added
+
+- `GET /api/traces/explore` (rows, facet counts, histogram, percentiles in one call), a `query`
+  parameter plus `sort`/`order` on `GET /api/traces`, per-value counts in `/api/traces/facets`,
+  `GET /api/evals/matrix`, `previous` period KPIs and tool `error_rate` in `/api/overview`.
+- Chat traces carry `session.id`; chat turns record per-step model parts and the context given to
+  the model; eval case results include the agent `trace_id`.
+
 ## [0.2.0] - 2026-11-13
 
 ### Added

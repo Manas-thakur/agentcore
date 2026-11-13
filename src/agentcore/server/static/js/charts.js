@@ -138,3 +138,108 @@ export function lineChart(host, { rows, series, height = 200, fmtY = (v) => Stri
     host.appendChild(root);
   });
 }
+
+// Tiny trend line for KPI cards. `values` are numbers (nulls are skipped).
+export function sparkline(values, { width = 120, height = 32, cls = "spark", label } = {}) {
+  const root = svg("svg", { class: cls, width, height, viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: "none", role: "img", "aria-label": label || "trend" });
+  const pts = values.map((v) => (typeof v === "number" && Number.isFinite(v) ? v : 0));
+  if (pts.length < 2) return root;
+  const max = Math.max(...pts);
+  const min = Math.min(0, ...pts);
+  const span = max - min || 1;
+  const x = (i) => (i / (pts.length - 1)) * (width - 2) + 1;
+  const y = (v) => height - 2 - ((v - min) / span) * (height - 4);
+  const d = pts.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("");
+  root.appendChild(svg("path", { class: "spark-area", d: `${d}L${x(pts.length - 1).toFixed(1)},${height}L${x(0).toFixed(1)},${height}Z` }));
+  root.appendChild(svg("path", { class: "spark-line", d }));
+  root.appendChild(svg("circle", { class: "spark-dot", cx: x(pts.length - 1), cy: y(pts[pts.length - 1]), r: 2 }));
+  return root;
+}
+
+// Trace volume histogram with drag-to-select (brush). `onSelect(t0, t1)` gets epoch seconds;
+// a plain click selects one bucket. Errors stack on top of successes.
+export function histogram(host, { buckets, start, end, selection, onSelect, fmtTip, height = 72 }) {
+  observe(host, () => {
+    host.replaceChildren();
+    const width = Math.max(240, host.clientWidth);
+    const pad = { l: 4, r: 4, t: 6, b: 16 };
+    const iw = width - pad.l - pad.r;
+    const ih = height - pad.t - pad.b;
+    const n = buckets.length || 1;
+    const maxY = Math.max(1, ...buckets.map((b) => b.count));
+    const root = svg("svg", { width, height, viewBox: `0 0 ${width} ${height}`, class: "histo", role: "img", "aria-label": `Trace volume over time, ${buckets.reduce((a, b) => a + b.count, 0)} traces` });
+    const tip = tooltip(host);
+    const bw = iw / n;
+    const tToX = (t) => pad.l + ((t - start) / (end - start)) * iw;
+    const xToT = (x) => start + ((Math.min(Math.max(x, pad.l), pad.l + iw) - pad.l) / iw) * (end - start);
+    root.appendChild(svg("line", { class: "histo-base", x1: pad.l, x2: pad.l + iw, y1: pad.t + ih + 0.5, y2: pad.t + ih + 0.5 }));
+    buckets.forEach((b, i) => {
+      if (!b.count) return;
+      const x = pad.l + i * bw + Math.min(1, bw * 0.15);
+      const w = Math.max(1, bw - Math.min(2, bw * 0.3));
+      const hOk = (ih * (b.count - b.errors)) / maxY;
+      const hErr = (ih * b.errors) / maxY;
+      if (hOk > 0) root.appendChild(svg("rect", { class: "histo-bar", x, y: pad.t + ih - hOk, width: w, height: Math.max(1, hOk), rx: 1 }));
+      if (hErr > 0) root.appendChild(svg("rect", { class: "histo-err", x, y: pad.t + ih - hOk - hErr, width: w, height: Math.max(1, hErr), rx: 1 }));
+    });
+    // axis labels: start, middle, end
+    const fmt = (t) => {
+      const d = new Date(t * 1000);
+      return end - start > 2 * 86400 ? d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) : d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    };
+    const axis = svg("g", { class: "axis" });
+    axis.appendChild(svg("text", { x: pad.l, y: height - 3, "text-anchor": "start" }, fmt(start)));
+    axis.appendChild(svg("text", { x: pad.l + iw / 2, y: height - 3, "text-anchor": "middle" }, fmt((start + end) / 2)));
+    axis.appendChild(svg("text", { x: pad.l + iw, y: height - 3, "text-anchor": "end" }, fmt(end)));
+    root.appendChild(axis);
+    const sel = svg("rect", { class: "histo-sel", y: pad.t, height: ih, x: 0, width: 0, visibility: "hidden" });
+    root.appendChild(sel);
+    const showSel = (a, b) => {
+      const x0 = Math.min(a, b);
+      sel.setAttribute("x", x0);
+      sel.setAttribute("width", Math.max(2, Math.abs(b - a)));
+      sel.setAttribute("visibility", "visible");
+    };
+    if (selection && (selection[0] || selection[1])) {
+      showSel(tToX(selection[0] ?? start), tToX(selection[1] ?? end));
+    }
+    // brush
+    let dragFrom = null;
+    const local = (ev) => {
+      const r = root.getBoundingClientRect();
+      return ((ev.clientX - r.left) / r.width) * width;
+    };
+    root.addEventListener("pointerdown", (ev) => {
+      if (ev.button !== 0) return;
+      dragFrom = local(ev);
+      root.setPointerCapture(ev.pointerId);
+      tip.hide();
+    });
+    root.addEventListener("pointermove", (ev) => {
+      const x = local(ev);
+      if (dragFrom !== null) {
+        showSel(dragFrom, x);
+        return;
+      }
+      const i = Math.floor((x - pad.l) / bw);
+      const b = buckets[i];
+      if (b && fmtTip) tip.show(pad.l + (i + 0.5) * bw, pad.t, fmtTip(b, bw));
+      else tip.hide();
+    });
+    root.addEventListener("pointerleave", () => tip.hide());
+    root.addEventListener("pointerup", (ev) => {
+      if (dragFrom === null) return;
+      const x = local(ev);
+      let a = Math.min(dragFrom, x);
+      let b = Math.max(dragFrom, x);
+      dragFrom = null;
+      if (b - a < 4) {
+        const i = Math.max(0, Math.min(n - 1, Math.floor((a - pad.l) / bw)));
+        a = pad.l + i * bw;
+        b = a + bw;
+      }
+      if (onSelect) onSelect(xToT(a), xToT(b));
+    });
+    host.appendChild(root);
+  });
+}

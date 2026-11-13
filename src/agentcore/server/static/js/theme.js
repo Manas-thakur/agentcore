@@ -11,7 +11,7 @@ export function getThemePref() {
     return "system";
   }
 }
-function effectiveTheme() {
+export function effectiveTheme() {
   const pref = getThemePref();
   if (pref === "light" || pref === "dark") return pref;
   return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -36,9 +36,12 @@ function paintThemeButtons() {
     b.title = dark ? "Light theme" : "Dark theme";
   }
 }
+export function toggleTheme() {
+  setThemePref(effectiveTheme() === "dark" ? "light" : "dark");
+}
 export function initTheme() {
   for (const b of document.querySelectorAll(".theme-btn")) {
-    b.addEventListener("click", () => setThemePref(effectiveTheme() === "dark" ? "light" : "dark"));
+    b.addEventListener("click", toggleTheme);
   }
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
     paintThemeButtons();

@@ -81,6 +81,10 @@ def test_web_app_shell_and_static(client):
         "/static/js/views/overview.js",
         "/static/js/views/tools.js",
         "/static/js/views/settings.js",
+        "/static/js/palette.js",
+        "/static/js/peek.js",
+        "/static/js/query.js",
+        "/static/js/trace-detail.js",
         "/favicon.ico",
     ):
         assert client.get(path).status_code == 200, path
@@ -323,6 +327,7 @@ def test_trace_filters_export_and_overview(client):
         "calls": 1,
         "errors": 0,
         "avg_ms": pytest.approx(ov["top_tools"][0]["avg_ms"]),
+        "error_rate": 0.0,
     }
     assert ov["models"][0]["model"] == "mock"
 

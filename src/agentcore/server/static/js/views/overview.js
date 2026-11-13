@@ -1,7 +1,8 @@
-// Overview: KPIs over a time range, charts over time, top tools and models.
+// Overview: KPI cards with sparklines and deltas vs the previous period, latency p50/p95,
+// tokens and cost over time, top tools with error rates, models and recent failures.
 
 import { api } from "../api.js";
-import { barChart, lineChart } from "../charts.js";
+import { barChart, lineChart, sparkline } from "../charts.js";
 import {
   clear,
   emptyState,
@@ -14,6 +15,7 @@ import {
   h,
   icon,
   loading,
+  pctChange,
   store,
 } from "../ui.js";
 
@@ -33,7 +35,7 @@ export async function render(root) {
     h(
       "div",
       { class: "page-head" },
-      h("div", null, h("h1", null, "Overview"), h("p", { class: "lede" }, "Agent runs recorded in the trace directory: volume, reliability, latency, tokens and cost.")),
+      h("div", null, h("h1", null, "Overview"), h("p", { class: "lede" }, "Agent runs from the trace directory. Deltas compare with the previous period of the same length.")),
       h("div", { class: "actions" }, seg, refresh),
     ),
   );
@@ -83,18 +85,57 @@ export async function render(root) {
       );
       return;
     }
-    const fig = (label, val, sub, warn) =>
-      h("div", { class: "figure" }, h("span", { class: "label" }, label), h("div", { class: "val", style: warn ? { color: "var(--color-err)" } : null }, val), h("div", { class: "sub" }, sub));
+    const prev = d.previous;
+    const s0 = d.series;
+    const rangeLabel = (RANGES.find((r) => r.days === days) || {}).label || `${days} days`;
+    // better: "up" = higher is better, "down" = lower is better, "none" = neutral volume.
+    const kpi = ({ label, value, cur, before, better, fmtDelta, series, sub, err }) => {
+      let delta = null;
+      if (prev && before !== undefined) {
+        const change = pctChange(cur, before);
+        let text;
+        if (fmtDelta) text = fmtDelta(cur, before);
+        else if (change === null) text = "new";
+        else text = `${change > 0 ? "▲ " : change < 0 ? "▼ " : ""}${Math.abs(change * 100).toFixed(Math.abs(change) < 0.1 ? 1 : 0)}%`;
+        const diff = (cur ?? 0) - (before ?? 0);
+        let tone = "flat";
+        if (Math.abs(diff) > 1e-9 && better !== "none") tone = diff > 0 === (better === "up") ? "good" : "bad";
+        delta = h("span", { class: `kpi-delta ${tone}`, title: `Previous ${rangeLabel}: ${before === null ? "-" : before}` }, text);
+      }
+      return h(
+        "div",
+        { class: `kpi${err ? " kpi--err" : ""}` },
+        h("span", { class: "kpi-label" }, label),
+        h("div", { class: "kpi-row" }, h("span", { class: "kpi-val" }, value), delta),
+        h("span", { class: "kpi-sub" }, sub || (prev ? `vs previous ${rangeLabel}` : "no earlier data to compare")),
+        series && series.length > 1 ? sparkline(series, { label: `${label} trend` }) : null,
+      );
+    };
+    const ppDelta = (cur, before) => {
+      if (cur === null || before === null || cur === undefined || before === undefined) return "n/a";
+      const pp = (cur - before) * 100;
+      return `${pp > 0 ? "▲ " : pp < 0 ? "▼ " : ""}${Math.abs(pp).toFixed(1)} pp`;
+    };
     body.appendChild(
       h(
         "div",
-        { class: "figures" },
-        fig("Runs", fmtNum(k.runs), `${fmtNum(k.tool_calls)} tool calls`),
-        fig("Success rate", fmtPct(k.success_rate), `${fmtNum(k.errors)} failed`, k.success_rate !== null && k.success_rate < 0.95),
-        fig("p50 latency", fmtMs(k.p50_ms), "per run"),
-        fig("p95 latency", fmtMs(k.p95_ms), "per run"),
-        fig("Tokens", fmtNum(k.tokens), k.runs ? `${fmtNum(Math.round(k.tokens / k.runs))} per run` : "-"),
-        fig("Cost", fmtCost(k.cost_usd), "estimated from the price table"),
+        { class: "kpis" },
+        kpi({ label: "Runs", value: fmtNum(k.runs), cur: k.runs, before: prev?.runs, better: "none", series: s0.map((b) => b.runs), sub: `${fmtNum(k.tool_calls)} tool calls` }),
+        kpi({
+          label: "Success rate",
+          value: fmtPct(k.success_rate),
+          cur: k.success_rate,
+          before: prev?.success_rate,
+          better: "up",
+          fmtDelta: ppDelta,
+          series: s0.map((b) => (b.runs ? (b.runs - b.errors) / b.runs : null)),
+          sub: `${fmtNum(k.errors)} failed`,
+          err: k.success_rate !== null && k.success_rate < 0.95,
+        }),
+        kpi({ label: "p50 latency", value: fmtMs(k.p50_ms), cur: k.p50_ms, before: prev?.p50_ms, better: "down", series: s0.map((b) => b.p50_ms) }),
+        kpi({ label: "p95 latency", value: fmtMs(k.p95_ms), cur: k.p95_ms, before: prev?.p95_ms, better: "down", series: s0.map((b) => b.p95_ms) }),
+        kpi({ label: "Tokens", value: fmtNum(k.tokens), cur: k.tokens, before: prev?.tokens, better: "none", series: s0.map((b) => b.tokens), sub: k.runs ? `${fmtNum(Math.round(k.tokens / k.runs))} per run` : "-" }),
+        kpi({ label: "Cost", value: fmtCost(k.cost_usd), cur: k.cost_usd, before: prev?.cost_usd, better: "down", series: s0.map((b) => b.cost_usd), sub: "estimated from the price table" }),
       ),
     );
 
@@ -108,13 +149,13 @@ export async function render(root) {
     const latChart = h("div", { class: "chart" });
     const tokChart = h("div", { class: "chart" });
     const costChart = h("div", { class: "chart" });
-    const panel = (title, sub, chart) => h("div", { class: "panel" }, h("div", { class: "panel-head" }, h("h2", null, title), h("span", { class: "hint" }, sub)), h("div", { class: "panel-body" }, chart));
+    const panel = (title, sub, chart) => h("section", { class: "panel" }, h("div", { class: "panel-head" }, h("h2", null, title), typeof sub === "string" ? h("span", { class: "hint" }, sub) : h("div", { class: "actions" }, sub)), h("div", { class: "panel-body" }, chart));
     body.appendChild(
       h(
         "div",
         { class: "charts" },
-        panel("Runs", "ok + failed per bucket", runsChart),
-        panel("Latency", "p50 solid · p95 dashed", latChart),
+        panel("Runs", h("span", { class: "legend" }, h("span", null, h("i", { style: { background: "var(--span-model)" } }), "ok"), h("span", null, h("i", { style: { background: "var(--err)" } }), "failed")), runsChart),
+        panel("Latency", h("span", { class: "legend" }, h("span", null, h("i", { class: "dash", style: { background: "var(--accent)" } }), "p50"), h("span", null, h("i", { class: "dash", style: { background: "var(--span-agent)" } }), "p95 (dashed)")), latChart),
         panel("Tokens", "prompt + completion", tokChart),
         panel("Cost", "USD, estimated", costChart),
       ),
@@ -147,10 +188,11 @@ export async function render(root) {
     });
 
     const maxCalls = Math.max(1, ...d.top_tools.map((t) => t.calls));
+    const toolHref = (name) => `#/traces?query=${encodeURIComponent(`tool:${name}`)}`;
     const toolsPanel = h(
-      "div",
+      "section",
       { class: "panel" },
-      h("div", { class: "panel-head" }, h("h2", null, "Top tools"), h("span", { class: "hint" }, "by calls")),
+      h("div", { class: "panel-head" }, h("h2", null, "Top tools"), h("span", { class: "hint" }, "by calls, with error rate")),
       d.top_tools.length
         ? h(
             "div",
@@ -158,31 +200,37 @@ export async function render(root) {
             h(
               "table",
               { class: "table" },
-              h("thead", null, h("tr", null, h("th", null, "Tool"), h("th", { class: "num" }, "Calls"), h("th", { class: "num" }, "Errors"), h("th", { class: "num" }, "Avg"))),
+              h("thead", null, h("tr", null, h("th", null, "Tool"), h("th", { class: "num" }, "Calls"), h("th", { class: "num" }, "Error rate"), h("th", { class: "num hide-sm" }, "Avg latency"))),
               h(
                 "tbody",
                 null,
-                d.top_tools.map((t) =>
-                  h(
+                d.top_tools.map((t) => {
+                  const rate = t.error_rate ?? (t.calls ? t.errors / t.calls : 0);
+                  return h(
                     "tr",
                     null,
                     h(
                       "td",
                       null,
-                      h("div", { class: "hbar" }, h("span", { class: "mono small", style: { color: "var(--color-ink)" } }, t.name), h("div", { class: "hbar-track", title: `${t.calls} calls, ${t.errors} errors` }, h("i", { style: { width: `${((t.calls - t.errors) / maxCalls) * 100}%` } }), h("i", { class: "err", style: { width: `${(t.errors / maxCalls) * 100}%` } }))),
+                      h(
+                        "div",
+                        { class: "hbar" },
+                        h("a", { class: "mono small", href: toolHref(t.name), title: `Traces that called ${t.name}`, style: { color: "var(--ink)" } }, t.name),
+                        h("div", { class: "hbar-track", "aria-hidden": "true" }, h("i", { style: { width: `${((t.calls - t.errors) / maxCalls) * 100}%` } }), h("i", { class: "err", style: { width: `${(t.errors / maxCalls) * 100}%` } })),
+                      ),
                     ),
                     h("td", { class: "num" }, fmtNum(t.calls)),
-                    h("td", { class: "num", style: t.errors ? { color: "var(--color-err)" } : null }, fmtNum(t.errors)),
-                    h("td", { class: "num" }, fmtMs(t.avg_ms)),
-                  ),
-                ),
+                    h("td", { class: "num" }, h("span", { class: "rate-bar" }, h("span", { style: rate > 0 ? { color: "var(--err)" } : null }, fmtPct(rate)), h("span", { class: "rate-track", "aria-hidden": "true" }, h("i", { style: { width: `${Math.min(1, rate) * 100}%` } })))),
+                    h("td", { class: "num hide-sm" }, fmtMs(t.avg_ms)),
+                  );
+                }),
               ),
             ),
           )
         : h("p", { class: "hint", style: { padding: "var(--space-4)", margin: 0 } }, "No tool calls in this range."),
     );
     const modelsPanel = h(
-      "div",
+      "section",
       { class: "panel" },
       h("div", { class: "panel-head" }, h("h2", null, "Models")),
       h(
@@ -198,7 +246,7 @@ export async function render(root) {
       d.recent_errors.length
         ? h(
             "div",
-            { class: "panel-body", style: { borderTop: "1px solid var(--color-rule)" } },
+            { class: "panel-body", style: { borderTop: "1px solid var(--border)" } },
             h("span", { class: "label" }, "Recent failures"),
             h("ul", { style: { margin: "8px 0 0", paddingLeft: "1.1em", fontSize: "var(--text-sm)" } }, d.recent_errors.map((e) => h("li", null, h("a", { href: `#/traces/${e.trace_id}` }, e.error || e.name), h("span", { class: "hint" }, ` · ${fmtAgo(e.start_time)}`)))),
           )

@@ -288,6 +288,94 @@ class EvalManager:
         )
         return {"suite": run["suite"], "baseline": run_id}
 
+    def matrix(self, suite_ref: str, limit: int = 8) -> dict[str, Any]:
+        """Cases x the last ``limit`` completed runs of a suite (oldest column first).
+
+        A cell is ``regressed`` when the case passed in the previous column and fails now,
+        or its score dropped; ``baseline_regressed`` compares against the baseline run."""
+        name, case_order = suite_ref, []
+        for s in self.discover():
+            if suite_ref in (s.get("path"), s.get("name")) and not s.get("error"):
+                name, case_order = s["name"], list(s.get("case_names") or [])
+                break
+        runs: list[dict[str, Any]] = []
+        files = sorted(
+            self._suite_dir(name).glob("runs/*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for path in files:
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if data.get("status") == "completed" and data.get("report"):
+                runs.append(data)
+            if len(runs) >= limit:
+                break
+        runs.sort(key=lambda r: (r.get("started_at") or "", r.get("id") or ""))
+        base_id = self.baseline_id(name)
+        base_cases: dict[str, dict[str, Any]] = {}
+        base = next((r for r in runs if r["id"] == base_id), None) or (
+            self._load_run(base_id) if base_id else None
+        )
+        if base and base.get("report"):
+            base_cases = {r["case"]: r for r in base["report"].get("runs", [])}
+        by_run = [{r["case"]: r for r in run["report"].get("runs", [])} for run in runs]
+        for results in by_run:
+            for case in results:
+                if case not in case_order:
+                    case_order.append(case)
+        rows = []
+        regressions = 0
+        for case in case_order:
+            cells: list[dict[str, Any] | None] = []
+            prev: dict[str, Any] | None = None
+            tags: list[str] = []
+            for run, results in zip(runs, by_run):
+                r = results.get(case)
+                if r is None:
+                    cells.append(None)
+                    continue
+                tags = r.get("tags") or tags
+                regressed = prev is not None and (
+                    (prev["passed"] and not r["passed"]) or r["score"] < prev["score"] - 1e-3
+                )
+                b = base_cases.get(case)
+                cell = {
+                    "run_id": run["id"],
+                    "passed": r["passed"],
+                    "score": r["score"],
+                    "duration_ms": r.get("duration_ms"),
+                    "steps": r.get("steps"),
+                    "error": r.get("error"),
+                    "failing": [m["name"] for m in r.get("metrics", []) if not m.get("passed")],
+                    "regressed": bool(regressed),
+                    "baseline_regressed": bool(
+                        b and run["id"] != base_id and b["passed"] and not r["passed"]
+                    ),
+                }
+                regressions += int(cell["regressed"])
+                cells.append(cell)
+                prev = r
+            rows.append({"case": case, "tags": tags, "cells": cells})
+        return {
+            "suite": name,
+            "baseline": base_id,
+            "runs": [
+                {
+                    "id": r["id"],
+                    "started_at": r.get("started_at"),
+                    "model": r.get("model"),
+                    "summary": (r.get("report") or {}).get("summary"),
+                    "is_baseline": r["id"] == base_id,
+                }
+                for r in runs
+            ],
+            "cases": rows,
+            "regressions": regressions,
+        }
+
     def get(self, run_id: str) -> dict[str, Any] | None:
         job = self.jobs.get(run_id)
         if job is not None and job.status in ("queued", "running"):

@@ -182,12 +182,12 @@ export async function render(root, { segments }) {
         "div",
         { class: "panel", style: { marginBottom: "var(--space-4)" } },
         h("div", { class: "panel-head" }, h("h2", { class: "mono" }, t.name), h("div", { class: "actions" }, chip(t.category), chip(t.source, t.source === "custom" ? "accent" : ""), t.timeout ? chip(`timeout ${t.timeout}s`) : null)),
-        h("div", { class: "panel-body" }, h("p", { style: { margin: 0, color: "var(--color-ink)" } }, t.description || "No description.")),
+        h("div", { class: "panel-body" }, h("p", { style: { margin: 0, color: "var(--ink)" } }, t.description || "No description.")),
       ),
       h(
         "div",
         { class: "tool-grid" },
-        h("div", { class: "panel" }, h("div", { class: "panel-head" }, h("h3", null, "Try it")), form, h("div", { style: { borderTop: "1px solid var(--color-rule)" } }, result)),
+        h("div", { class: "panel" }, h("div", { class: "panel-head" }, h("h3", null, "Try it")), form, h("div", { style: { borderTop: "1px solid var(--border)" } }, result)),
         h("div", { class: "panel" }, h("div", { class: "panel-head" }, h("h3", null, "JSON Schema")), h("div", { class: "panel-body" }, jsonPre(t.parameters, { wrap: true }))),
       ),
     );
