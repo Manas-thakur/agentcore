@@ -909,10 +909,14 @@ def create_app(
     # --- tools ----------------------------------------------------------------------------
     @app.get("/api/tools")
     def list_tools() -> list[dict[str, Any]]:
-        return [
-            {**t.to_dict(), "source": "custom" if name in custom_tools else "builtin"}
-            for name, t in tool_objs.items()
-        ]
+        def source(name: str, t: Any) -> str:
+            # A project's tool module may re-export built-ins (e.g. calculator);
+            # only tools defined outside AgentCore count as custom.
+            module = getattr(getattr(t, "fn", None), "__module__", "") or ""
+            builtin = module.startswith("agentcore.")
+            return "custom" if name in custom_tools and not builtin else "builtin"
+
+        return [{**t.to_dict(), "source": source(name, t)} for name, t in tool_objs.items()]
 
     @app.post("/api/tools/{name}/invoke")
     async def invoke_tool(name: str, req: S.ToolInvokeRequest) -> dict[str, Any]:

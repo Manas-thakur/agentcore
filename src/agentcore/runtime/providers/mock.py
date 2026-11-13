@@ -165,8 +165,20 @@ _STOP = set(
 )
 
 
+# Number-like tokens that are not arithmetic: ISO / slash dates, clock times and
+# version strings ("2026-01-01" is a date, not 2026 minus 1 minus 1).
+_NOT_MATH_RE = re.compile(
+    r"\b\d{4}-\d{1,2}-\d{1,2}(?:[T ]\d{1,2}:\d{2}(?::\d{2})?)?\b"
+    r"|\b\d{1,2}[/.]\d{1,2}[/.]\d{2,4}\b"
+    r"|\b\d{1,2}:\d{2}(?::\d{2})?\b"
+    r"|\bv?\d+\.\d+\.\d+\b"
+)
+_LOOKUP_INTENT_RE = re.compile(r"\b(look\s*up|lookup|search(?:\s+for)?|find out)\b", re.I)
+
+
 def find_math_expression(text: str) -> str | None:
     """Return the longest arithmetic expression in ``text`` (e.g. ``"17 * 23 + 4"``)."""
+    text = _NOT_MATH_RE.sub(" ", text)
     matches = [m.group(0).strip() for m in _MATH_RE.finditer(text)]
     if not matches:
         return None
@@ -337,6 +349,18 @@ class MockModel(ModelClient):
         code = _CODE_RE.search(task)
         if code and "python_exec" in available:
             return ToolCall("python_exec", {"code": code.group(1)})
+        lookup = next(
+            (
+                (name, schema)
+                for name, schema in available.items()
+                if any(k in name.lower() for k in ("search", "retriev", "lookup", "knowledge"))
+            ),
+            None,
+        )
+        if lookup and _LOOKUP_INTENT_RE.search(task):
+            # "Look up X" asks for the lookup tool even if numbers appear later.
+            name, schema = lookup
+            return ToolCall(name, {_first_string_param(schema) or "query": task.strip()[:500]})
         expr = find_math_expression(task)
         if expr:
             for name, schema in available.items():

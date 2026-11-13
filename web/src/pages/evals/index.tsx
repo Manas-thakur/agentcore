@@ -298,6 +298,9 @@ export default function EvalsPage() {
     setStarting(true);
     try {
       const job = await api.post<EvalRunInfo>("/api/evals/runs", { suite: suite.path, model: evalModel || null });
+      // Fast runs (e.g. the offline mock model) can finish before the first poll;
+      // mark it as ours so finishing still refreshes the matrix and suite list.
+      wasRunning.current = true;
       setUrl(suite.path, job.id);
       historyQ.reload();
     } catch (err) {
