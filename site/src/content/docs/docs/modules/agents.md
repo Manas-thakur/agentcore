@@ -59,7 +59,24 @@ verdict, the reviewer falls back to a heuristic review instead of failing the te
 | `CoderAgent` | Writes Python, runs it in the sandbox to verify it, reports the code and the result |
 | `ReviewerAgent` | Critiques another agent's output and returns a structured `ReviewResult` |
 
-Subclass `SpecializedAgent` for your own roles.
+Subclass `SpecializedAgent` for your own roles. Set `name` and `role`, and give the system prompt
+either as a plain string or as a method:
+
+```python
+from agentcore.agents import SpecializedAgent
+
+
+class Translator(SpecializedAgent):
+    name = "translator"
+    system_prompt = "Translate the user's text into French."  # a string works
+
+    # or compute it:
+    # def system_prompt(self) -> str:
+    #     return f"You are the {self.name}. Translate into French."
+```
+
+`await agent.run(task, context)` returns an `AgentOutput`; when the run fails (model error, step
+limit, an exception while building the agent) `success` is `False` and `error` says why.
 
 ## The A2A message bus
 
@@ -74,7 +91,10 @@ debugging. Deliveries are traced as `a2a.deliver` spans.
   tasks (in parallel where they do not depend on each other), dependency outputs are passed in as
   context, and the results are combined.
 - `Pipeline(agents, bus=None)`: A then B then C; each agent receives the original task plus the
-  previous agent's output.
+  previous agent's output. If a member fails, the pipeline stops there: `result.success` is
+  `False`, `result.error` is `"<agent> failed: <reason>"` and `result.output` is empty
+  (`result.results` has the outputs up to the failure). `ManagerWorker` results also carry
+  `error` for the first failed task.
 - `peer_review(worker, reviewer, task, max_rounds=2)`: the worker produces, the reviewer
   critiques, and on rejection the worker revises with the feedback.
 

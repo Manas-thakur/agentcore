@@ -49,6 +49,20 @@ with `recall_at_k`.
 
 `metric` is `cosine` (default), `l2` or `dot`. Every index supports metadata filters at search
 time (`search(query, k, filter=...)`), `search_batch`, deletes and `save()` / `load_index()`.
+
+A filter is either a dict of metadata conditions that must all hold, or a callable
+`filter(id: str, metadata: dict) -> bool`:
+
+```python
+index.add(vectors, ids=["a", "b"], metadata=[{"lang": "en"}, {"lang": "de"}])
+index.search(q, k=5, filter={"lang": "en"})                 # equality
+index.search(q, k=5, filter={"lang": ["en", "de"]})         # one of
+index.search(q, k=5, filter=lambda id_, meta: meta.get("year", 0) >= 2024)
+```
+
+Items without the key never match a dict filter. Adding an id that already exists replaces it
+(upsert), and that also holds inside one `add()` call: when the same id appears twice, the last
+vector and metadata win, in every index type.
 `create_index(kind, dimension, metric, **kwargs)` builds one by name (`flat`, `hnsw`, `ivf`, `sq8`,
 `pq`); `kmeans` and the `ScalarQuantizer` / `ProductQuantizer` building
 blocks are exported too.

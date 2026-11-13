@@ -38,12 +38,21 @@ Sources:
 `RAGPipeline(*, embedder, index, chunker, reranker, model, k=4, candidate_k=20, hybrid_weights,
 max_context_tokens=3000)`. Every argument has an offline default, so `RAGPipeline()` works with no
 configuration (hashing embeddings, a flat index, a recursive chunker, a lexical reranker).
+Without a `model`, `answer()` is **extractive**: it returns the source sentences that best match
+the question, each with its `[n]` citation (the same thing the `mock` model does). Pass
+`model=create_model(...)` for generated answers.
+
+Markdown (`.md`, `.markdown`) and MDX (`.mdx`) files may start with YAML front matter: it is
+removed from the text, and its `title` (and `description`) become the document's metadata, so
+citations show the front-matter title. In MDX files `import`/`export` lines, `{/* comments */}`
+and JSX tags are stripped; the text between tags and `alt` text of images are kept, code blocks
+are left untouched. Document sources use forward slashes on every OS.
 
 ## Building blocks
 
 | Stage | Classes |
 |---|---|
-| Loading | `load_file`, `load_directory`, `load_path` (txt, md, html, jsonl, directories) |
+| Loading | `load_file`, `load_directory`, `load_path` (txt, md, mdx, rst, html, json/yaml/csv, jsonl, directories) |
 | Chunking | `FixedSizeChunker`, `RecursiveChunker`, `SentenceChunker`, `MarkdownChunker` (heading-aware), `create_chunker` |
 | Embedding | `HashingEmbedder` (offline), `OllamaEmbedder`, `OpenAIEmbedder`, `create_embedder` (`AGENTCORE_EMBEDDER`) |
 | Retrieval | `BM25`, `BM25Retriever`, `VectorRetriever`, `HybridRetriever` with `reciprocal_rank_fusion` |

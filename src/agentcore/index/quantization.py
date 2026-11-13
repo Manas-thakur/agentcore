@@ -20,6 +20,7 @@ from agentcore.index.base import (
     as_matrix,
     scores_for,
     top_k,
+    unique_batch,
 )
 from agentcore.index.kmeans import kmeans
 
@@ -125,6 +126,7 @@ class _QuantizedIndex(VectorIndex):
     def _append(
         self, codes: np.ndarray, ids: list[str], metadata: list[dict[str, Any]] | None
     ) -> None:
+        codes, ids, metadata = unique_batch(codes, ids, metadata)
         self.delete([i for i in ids if i in self._pos])
         start = len(self._ids)
         self._codes = codes if self._codes is None else np.vstack([self._codes, codes])

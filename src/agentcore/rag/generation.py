@@ -221,18 +221,28 @@ class RAGPipeline:
         return [Message.system(RAG_SYSTEM_PROMPT), Message.user(user)], used
 
     async def answer(self, question: str, k: int | None = None) -> RAGAnswer:
-        if self.model is None:
-            raise ValueError("RAGPipeline.answer() needs a model; pass model=create_model('mock')")
+        """Retrieve, then generate a cited answer with ``model``.
+
+        Without a model the answer is extractive: the source sentences that best match the
+        question, each cited (no LLM involved, like the ``mock`` model).
+        """
         contexts = self.retrieve(question, k)
         messages, used = self.build_messages(question, contexts)
-        resp = await self.model.generate(messages)
+        if self.model is None:
+            from agentcore.runtime.providers.mock import extractive_answer
+
+            text = extractive_answer(
+                question, {i: sc.content for i, sc in enumerate(used, start=1)}
+            )
+        else:
+            text = (await self.model.generate(messages)).content
         tracker = CitationTracker(used)
         return RAGAnswer(
             question,
-            resp.content,
-            tracker.citations(resp.content),
+            text,
+            tracker.citations(text),
             used,
-            tracker.invalid_numbers(resp.content),
+            tracker.invalid_numbers(text),
         )
 
     def answer_sync(self, question: str, k: int | None = None) -> RAGAnswer:

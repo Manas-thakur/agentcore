@@ -8,8 +8,14 @@ determined attacker; use a container or VM for untrusted multi-tenant workloads)
 * wall-clock timeout (process is killed)
 * CPU-time and address-space limits via ``resource`` on POSIX
 * network disabled by replacing ``socket.socket`` (unless ``network_access=True``)
-* optional import allow-list
+* optional import allow-list (``allowed_imports``) and deny-list (``blocked_imports``); both
+  apply to imports written in the sandboxed code, not to the standard library's own imports
 * stdout/stderr size caps
+
+Windows: ``resource`` does not exist, so ``memory_limit_mb`` and ``cpu_time_seconds`` are NOT
+enforced there (only the wall-clock timeout is). The import lists are a speed bump, not a
+boundary: code can still reach the OS through objects it is given. Run untrusted code in a
+container or VM.
 """
 
 from __future__ import annotations
@@ -31,6 +37,7 @@ class SandboxConfig:
     cpu_time_seconds: int | None = 10
     network_access: bool = False
     allowed_imports: list[str] | None = None
+    blocked_imports: list[str] | None = None
     max_output_chars: int = 20_000
     env: dict[str, str] = field(default_factory=dict)
 
@@ -81,17 +88,24 @@ if not _cfg.get("network"):
     _socket.create_connection = lambda *a, **k: (_ for _ in ()).throw(
         PermissionError("network access is disabled in the sandbox"))
 _allowed = _cfg.get("allowed")
-if _allowed is not None:
+_blocked = set(_cfg.get("blocked") or ())
+_g = {"__name__": "__main__"}
+if _allowed is not None or _blocked:
     _real_import = builtins.__import__
     _always = {"builtins", "sys", "json", "encodings", "codecs", "io", "abc", "_io"}
     def _guarded(name, globals=None, locals=None, fromlist=(), level=0):
-        root = name.split(".")[0]
-        if level == 0 and root not in _allowed and root not in _always and not root.startswith("_"):
-            raise ImportError(f"import of {root!r} is not allowed in the sandbox")
+        # Only imports written in the sandboxed code are checked; the standard library's
+        # own imports (e.g. random -> os) must keep working.
+        if level == 0 and (globals is None or globals is _g):
+            root = name.split(".")[0]
+            if root in _blocked or (
+                _allowed is not None
+                and root not in _allowed and root not in _always and not root.startswith("_")
+            ):
+                raise ImportError(f"import of {root!r} is not allowed in the sandbox")
         return _real_import(name, globals, locals, fromlist, level)
     builtins.__import__ = _guarded
 _code = open(_cfg["path"], encoding="utf-8").read()
-_g = {"__name__": "__main__"}
 exec(compile(_code, "<sandbox>", "exec"), _g)
 """
 
@@ -113,6 +127,7 @@ class SubprocessSandbox:
                     "cpu_s": cfg.cpu_time_seconds,
                     "network": cfg.network_access,
                     "allowed": cfg.allowed_imports,
+                    "blocked": cfg.blocked_imports,
                 }
             )
             env = {

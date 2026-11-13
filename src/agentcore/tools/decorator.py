@@ -24,7 +24,7 @@ class Tool:
     fn: Callable[..., Any]
     category: str = "general"
     timeout: float | None = 30.0
-    retries: int = 0
+    retries: int | None = None  # None: the ExecutionEngine's RetryPolicy decides; 0: never retry
     strict: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -87,7 +87,7 @@ def tool(
     description: str | None = None,
     category: str = "general",
     timeout: float | None = 30.0,
-    retries: int = 0,
+    retries: int | None = None,
     strict: bool = False,
     **metadata: Any,
 ) -> Callable[[Callable[..., Any]], Tool]: ...
@@ -100,11 +100,15 @@ def tool(
     description: str | None = None,
     category: str = "general",
     timeout: float | None = 30.0,
-    retries: int = 0,
+    retries: int | None = None,
     strict: bool = False,
     **metadata: Any,
 ) -> Tool | Callable[[Callable[..., Any]], Tool]:
     """Create a :class:`Tool` from a function. Usable as ``@tool`` or ``@tool(...)``.
+
+    ``retries``: how often a retryable failure (timeout, rate limit, ``ToolTransientError``)
+    is retried. ``None`` (default) uses the engine's ``RetryPolicy.max_retries`` (2); ``0``
+    disables retries for this tool.
 
     The JSON Schema is generated from type hints; parameter descriptions come from the
     docstring (Google, NumPy or Sphinx style).

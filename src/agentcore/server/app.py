@@ -89,12 +89,13 @@ def _oai_content(content: Any) -> str:
     return "\n".join(parts)
 
 
+OAI_ROLES = ("system", "developer", "user", "assistant", "tool")
+
+
 def _oai_messages(messages: list[Any]) -> list[Message]:
     out = []
     for m in messages:
-        role = m.role if m.role in ("system", "user", "assistant", "tool") else "user"
-        if m.role == "developer":
-            role = "system"
+        role = "system" if m.role == "developer" else m.role
         calls = []
         for tc in m.tool_calls or []:
             fn = tc.get("function", {})
@@ -135,7 +136,9 @@ def create_app(
     mock_stream_delay: float = 0.0,
 ) -> Any:
     try:
-        from fastapi import FastAPI, HTTPException, Query
+        from fastapi import FastAPI, HTTPException, Query, Request
+        from fastapi.exception_handlers import request_validation_exception_handler
+        from fastapi.exceptions import RequestValidationError
         from fastapi.middleware.cors import CORSMiddleware
         from fastapi.responses import (
             HTMLResponse,
@@ -148,8 +151,10 @@ def create_app(
 
         from agentcore.server import schemas as S
     except ImportError as exc:  # pragma: no cover - depends on installed extras
+        from agentcore._install import install_hint
+
         raise RuntimeError(
-            "the server needs the 'server' extra: pip install 'agentcore[server]'"
+            f"the server needs the 'server' extra: {install_hint('server')}"
         ) from exc
     from agentcore.server.analytics import (
         explore,
@@ -158,7 +163,7 @@ def create_app(
         overview,
         parse_time,
     )
-    from agentcore.server.evals import EvalManager
+    from agentcore.server.evals import AmbiguousSuiteError, EvalDirError, EvalManager
     from agentcore.server.query import QueryError, parse_query
     from agentcore.server.security import SPA_ROUTES, APIKeyMiddleware, BodySizeLimitMiddleware
     from agentcore.server.sessions import SessionStore, valid_session_id
@@ -315,6 +320,12 @@ def create_app(
             "auth": bool(cfg.server.api_key),
         }
 
+    def is_custom(name: str, t: Any) -> bool:
+        # A project's tool module may re-export built-ins (e.g. calculator);
+        # only tools defined outside AgentCore count as custom.
+        module = getattr(getattr(t, "fn", None), "__module__", "") or ""
+        return name in custom_tools and not module.startswith("agentcore.")
+
     @app.get("/api/config")
     def get_config() -> dict[str, Any]:
         return {
@@ -323,7 +334,7 @@ def create_app(
             "python": platform.python_version(),
             "default_model": default_model.model_id,
             "enabled_tools": allowed_tools,
-            "custom_tools": sorted(custom_tools),
+            "custom_tools": sorted(n for n, t in custom_tools.items() if is_custom(n, t)),
         }
 
     async def ollama_models() -> list[str]:
@@ -393,6 +404,7 @@ def create_app(
             max_steps=req.max_steps,
             memory=session.memory if session else None,
             name="api",
+            raise_on_error=True,
         )
         task: str | list[Message]
         if req.messages:
@@ -477,6 +489,7 @@ def create_app(
             memory=session.memory,
             stream=True,
             name="chat",
+            raise_on_error=True,
         )
         session.settings = {
             "model": mdl.model_id,
@@ -664,14 +677,46 @@ def create_app(
         return {"stopped": False}
 
     # --- OpenAI-compatible chat completions -----------------------------------------------
-    def oai_error(status: int, message: str, code: str | None = None) -> JSONResponse:
-        return JSONResponse(
-            {"error": {"message": message, "type": "invalid_request_error", "code": code}},
-            status_code=status,
-        )
+    def oai_error_body(
+        message: str,
+        type: str = "invalid_request_error",
+        param: str | None = None,
+        code: str | None = None,
+    ) -> dict[str, Any]:
+        return {"error": {"message": message, "type": type, "param": param, "code": code}}
+
+    def oai_error(
+        status: int,
+        message: str,
+        code: str | None = None,
+        *,
+        type: str = "invalid_request_error",
+        param: str | None = None,
+    ) -> JSONResponse:
+        return JSONResponse(oai_error_body(message, type, param, code), status_code=status)
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request: Request, exc: RequestValidationError) -> Any:
+        if request.url.path != "/v1/chat/completions":
+            return await request_validation_exception_handler(request, exc)
+        first = (exc.errors() or [{}])[0]
+        loc = [str(p) for p in first.get("loc", ()) if p != "body"]
+        param = ".".join(loc) or None
+        message = str(first.get("msg") or "invalid request")
+        return oai_error(400, f"{param}: {message}" if param else message, param=param)
 
     @app.post("/v1/chat/completions", response_model=None)
     async def chat_completions(req: S.ChatCompletionRequest) -> Any:
+        if req.n is not None and req.n != 1:
+            return oai_error(400, "only n=1 is supported", "unsupported_value", param="n")
+        for i, m in enumerate(req.messages):
+            if m.role not in OAI_ROLES:
+                return oai_error(
+                    400,
+                    f"invalid role {m.role!r}; expected one of {', '.join(OAI_ROLES)}",
+                    "invalid_value",
+                    param=f"messages.{i}.role",
+                )
         try:
             mdl = default_model if req.model in OAI_DEFAULT_NAMES else get_model(req.model)
         except HTTPException:
@@ -683,7 +728,9 @@ def create_app(
             )
         messages = _oai_messages(req.messages)
         if not any(m.role == "user" for m in messages):
-            return oai_error(400, "messages must include at least one user message")
+            return oai_error(
+                400, "messages must include at least one user message", param="messages"
+            )
         options: dict[str, Any] = {"temperature": req.temperature or 0.0}
         if req.max_tokens or req.max_completion_tokens:
             options["max_tokens"] = req.max_tokens or req.max_completion_tokens
@@ -694,6 +741,7 @@ def create_app(
             max_steps=8,
             stream=req.stream,
             name="openai",
+            raise_on_error=True,
             **options,
         )
         cid = f"chatcmpl-{uuid.uuid4().hex[:24]}"
@@ -704,7 +752,9 @@ def create_app(
             try:
                 result = await agent.run(messages)
             except Exception as exc:
-                return oai_error(502, f"agent failed: {type(exc).__name__}: {exc}")
+                return oai_error(
+                    502, f"agent failed: {type(exc).__name__}: {exc}", type="server_error"
+                )
             return {
                 "id": cid,
                 "object": "chat.completion",
@@ -757,8 +807,11 @@ def create_app(
                 await asyncio.wait([task])
                 if task.cancelled() or task.exception() is not None:
                     exc = None if task.cancelled() else task.exception()
-                    err = {"message": f"agent failed: {exc}" if exc else "cancelled"}
-                    yield f"data: {json.dumps({'error': err})}\n\n"
+                    err = oai_error_body(
+                        f"agent failed: {type(exc).__name__}: {exc}" if exc else "cancelled",
+                        "server_error",
+                    )
+                    yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"
                 else:
                     result = task.result()
                     if not streamed_final and result.output:
@@ -909,14 +962,10 @@ def create_app(
     # --- tools ----------------------------------------------------------------------------
     @app.get("/api/tools")
     def list_tools() -> list[dict[str, Any]]:
-        def source(name: str, t: Any) -> str:
-            # A project's tool module may re-export built-ins (e.g. calculator);
-            # only tools defined outside AgentCore count as custom.
-            module = getattr(getattr(t, "fn", None), "__module__", "") or ""
-            builtin = module.startswith("agentcore.")
-            return "custom" if name in custom_tools and not builtin else "builtin"
-
-        return [{**t.to_dict(), "source": source(name, t)} for name, t in tool_objs.items()]
+        return [
+            {**t.to_dict(), "source": "custom" if is_custom(name, t) else "builtin"}
+            for name, t in tool_objs.items()
+        ]
 
     @app.post("/api/tools/{name}/invoke")
     async def invoke_tool(name: str, req: S.ToolInvokeRequest) -> dict[str, Any]:
@@ -956,6 +1005,8 @@ def create_app(
             return evals.create_starter()
         except FileExistsError as exc:
             raise HTTPException(409, str(exc)) from exc
+        except EvalDirError as exc:
+            raise HTTPException(500, str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 
@@ -965,6 +1016,8 @@ def create_app(
             job = evals.start(req.suite, model=req.model, tags=req.tags)
         except KeyError as exc:
             raise HTTPException(404, str(exc).strip('"')) from exc
+        except AmbiguousSuiteError as exc:
+            raise HTTPException(409, str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         return job.to_dict(full=False)

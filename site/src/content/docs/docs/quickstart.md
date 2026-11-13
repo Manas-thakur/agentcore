@@ -71,8 +71,9 @@ Suite calculator-basic | model mock
 Result: 5/5 passed (100%), mean score 1.00, 607 tokens
 ```
 
-The exit code is 1 when a case fails or (with `--baseline`) when a regression is found, so the
-same command gates CI.
+The exit code is 1 when the pass rate is below `--fail-under` (default `1.0`, so any failing case
+counts) or, with `--baseline`, when a regression is found, so the same command gates CI. Usage
+errors (a missing suite or baseline file, an invalid suite) exit 2.
 
 ## 4. Open the web app
 

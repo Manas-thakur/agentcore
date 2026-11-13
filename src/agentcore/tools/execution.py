@@ -107,7 +107,22 @@ class TokenBucket:
         return False
 
 
-Middleware = Callable[[str, dict[str, Any]], Any]
+BeforeHook = Callable[[str, dict[str, Any]], Any]
+AfterHook = Callable[["ToolResult"], Any]
+Middleware = BeforeHook
+
+
+def _hooks(value: Any, name: str) -> list[Any]:
+    """Accept one callable, a list/tuple of callables, or None."""
+    if value is None:
+        return []
+    if callable(value):
+        return [value]
+    hooks = list(value)
+    for h in hooks:
+        if not callable(h):
+            raise TypeError(f"{name} hooks must be callables, got {h!r}")
+    return hooks
 
 
 class ExecutionEngine:
@@ -121,17 +136,21 @@ class ExecutionEngine:
         retry_policy: RetryPolicy | None = None,
         max_concurrency: int = 8,
         rate_limits: dict[str, TokenBucket] | None = None,
-        before: list[Callable[[str, dict[str, Any]], Any]] | None = None,
-        after: list[Callable[[ToolResult], Any]] | None = None,
+        before: BeforeHook | list[BeforeHook] | None = None,
+        after: AfterHook | list[AfterHook] | None = None,
     ):
+        """``before(name, kwargs)`` runs after validation, ``after(result)`` on every result.
+
+        Each may be a single callable or a list; sync or async.
+        """
         self.registry = registry
         self.default_timeout = default_timeout
         self.retry_policy = retry_policy or RetryPolicy()
         self.max_concurrency = max_concurrency
         self._semaphores: dict[int, asyncio.Semaphore] = {}
         self.rate_limits = rate_limits or {}
-        self.before = before or []
-        self.after = after or []
+        self.before: list[BeforeHook] = _hooks(before, "before")
+        self.after: list[AfterHook] = _hooks(after, "after")
 
     async def execute(
         self, name: str, arguments: dict[str, Any] | None = None, call_id: str | None = None
@@ -144,7 +163,7 @@ class ExecutionEngine:
             kwargs = t.validate(arguments)
             for hook in self.before:
                 await _maybe_await(hook(name, kwargs))
-            max_retries = max(t.retries, 0) if t.retries else self.retry_policy.max_retries
+            max_retries = self.retry_policy.max_retries if t.retries is None else max(t.retries, 0)
             timeout = t.timeout if t.timeout is not None else self.default_timeout
             while True:
                 attempts += 1

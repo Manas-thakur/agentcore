@@ -7,10 +7,10 @@ AgentCore needs **Python 3.10 or newer**. The core library depends only on `http
 `pyyaml` (plus `tomli` on Python 3.10). Optional extras add the web server, OpenTelemetry and
 pydantic support.
 
-:::note[PyPI]
-The release workflow can publish to PyPI, but publishing is switched off until a trusted
-publisher is configured. Until then, install from GitHub (below) or from a release wheel. The
-`agentcore` name on PyPI is not guaranteed to be this project.
+:::caution[Not on PyPI]
+AgentCore is **not published on PyPI**, and the `agentcore` name there belongs to a different,
+unrelated project: `pip install agentcore` or `pip install "agentcore[server]"` installs that
+package, not this one. Always install from GitHub (below) or from a release wheel.
 :::
 
 ## pip
@@ -24,6 +24,9 @@ pip install "agentcore[server] @ git+https://github.com/Manas-thakur/agentcore"
 
 # Everything: server, OpenTelemetry, pydantic
 pip install "agentcore[all] @ git+https://github.com/Manas-thakur/agentcore"
+
+# Pin a release tag
+pip install "agentcore[server] @ git+https://github.com/Manas-thakur/agentcore@v0.3.0"
 ```
 
 The web app is a pre-built React bundle that ships **inside the Python package**

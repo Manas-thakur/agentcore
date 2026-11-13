@@ -6,6 +6,9 @@ tracing is a no-op until you call :func:`configure_tracing`.
 
 If ``opentelemetry-api`` is installed and ``use_otel=True``, every span is mirrored as
 an OpenTelemetry span so you can ship traces to any OTLP backend (Jaeger, Tempo, ...).
+When an OpenTelemetry SDK tracer provider is configured, a root span takes the OTel trace
+id as its AgentCore ``trace_id`` (same 32-hex format), so both systems share one id; every
+mirrored span also carries ``agentcore.trace_id`` and ``agentcore.span_id`` attributes.
 """
 
 from __future__ import annotations
@@ -206,6 +209,7 @@ class Tracer:
                 name, attributes={k: _otel_value(v) for k, v in span.attributes.items()}
             )
             span._otel = otel_cm.__enter__()
+            _correlate_otel(span, is_root=parent is None)
         token = _current_span.set(span)
         try:
             yield span
@@ -230,6 +234,18 @@ class Tracer:
                         exp.export(span)
                     except Exception as e:  # exporters must never break the app
                         print(f"[agentcore] span export failed: {e}", file=sys.stderr)
+
+
+def _correlate_otel(span: Span, *, is_root: bool) -> None:
+    """Share one trace id between AgentCore and OpenTelemetry."""
+    try:
+        ctx = span._otel.get_span_context()
+        if is_root and getattr(ctx, "is_valid", False) and ctx.trace_id:
+            span.trace_id = format(ctx.trace_id, "032x")  # API-only (no SDK) ids are invalid
+        span._otel.set_attribute("agentcore.trace_id", span.trace_id)
+        span._otel.set_attribute("agentcore.span_id", span.span_id)
+    except Exception:  # never let the bridge break tracing
+        pass
 
 
 def current_span() -> Span | None:

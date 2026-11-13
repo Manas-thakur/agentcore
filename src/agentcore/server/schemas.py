@@ -69,3 +69,8 @@ class ChatCompletionRequest(BaseModel):
     max_tokens: int | None = None
     max_completion_tokens: int | None = None
     user: str | None = None
+    # Accepted for compatibility. Only n=1 is supported. ``tools``/``tool_choice`` are
+    # ignored: the agent uses the tools enabled on the server and returns the final answer.
+    n: int | None = None
+    tools: list[dict[str, Any]] | None = None
+    tool_choice: Union[str, dict[str, Any], None] = None

@@ -195,13 +195,16 @@ class EvalRunner:
         replay_from: str | Path | None = None,
         strict_replay: bool = False,
         tools: dict[str, Any] | None = None,
+        judge_all: bool = False,
     ):
+        if isinstance(concurrency, bool) or not isinstance(concurrency, int) or concurrency < 1:
+            raise ValueError(f"concurrency must be an integer >= 1, got {concurrency!r}")
         self._model = model
         self.extra_tools = dict(tools or {})
         self.agent_factory = agent_factory or self._default_factory
         self.metrics = list(metrics) if metrics is not None else list(DEFAULT_METRICS)
         if judge is not None:
-            self.metrics.append(LLMAsJudge(judge))
+            self.metrics.append(LLMAsJudge(judge, all_cases=judge_all))
         self.concurrency = concurrency
         self.record_to = record_to
         self.cassette = Cassette.load(replay_from) if replay_from else None
@@ -257,6 +260,17 @@ class EvalRunner:
             self._recorded[case.name] = model.records
         if run.error is None:
             run.metrics = [await m.evaluate(case, run) for m in self.metrics if m.applies_to(case)]
+            if not run.metrics:
+                # A case that checks nothing must not pass silently with score 1.0.
+                hint = (
+                    "its rubric needs a judge model (--judge-model)"
+                    if case.rubric
+                    else "add expected_output, expected_tool_calls, expected_trajectory, "
+                    "max_steps or a rubric"
+                )
+                run.metrics = [
+                    MetricResult("no_checks", 0.0, False, 1.0, f"case defines no checks: {hint}")
+                ]
         return run
 
     async def run_suite(

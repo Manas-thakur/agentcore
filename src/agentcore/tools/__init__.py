@@ -1,6 +1,13 @@
 """Tools: ``@tool`` -> JSON Schema -> validated, sandboxed execution."""
 
-from agentcore.tools.builtins import builtin_tools, calculator, file_tools, python_exec
+from agentcore.tools.builtins import (
+    builtin_tools,
+    calculator,
+    current_time,
+    file_tools,
+    make_python_exec,
+    python_exec,
+)
 from agentcore.tools.decorator import Tool, as_tool, tool
 from agentcore.tools.errors import (
     ToolError,
@@ -38,8 +45,10 @@ __all__ = [
     "as_tool",
     "builtin_tools",
     "calculator",
+    "current_time",
     "file_tools",
     "function_to_schema",
+    "make_python_exec",
     "parse_docstring",
     "python_exec",
     "tool",

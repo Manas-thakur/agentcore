@@ -87,9 +87,11 @@ uv add "agentcore[server] @ git+https://github.com/Manas-thakur/agentcore"
 docker run -p 8000:8000 -e AGENTCORE_MODEL=mock ghcr.io/manas-thakur/agentcore:latest
 ```
 
-Release wheels are attached to [GitHub Releases](https://github.com/Manas-thakur/agentcore/releases).
-PyPI publishing is wired up in the release workflow but switched off until a trusted publisher is
-configured. Extras: `server` (FastAPI + uvicorn), `otel` (OpenTelemetry), `pydantic`, `all`.
+Pin a release with `...agentcore@v0.3.0`. Release wheels are attached to
+[GitHub Releases](https://github.com/Manas-thakur/agentcore/releases).
+**AgentCore is not on PyPI**: the `agentcore` package there is a different project, so always
+install from GitHub as above. Extras: `server` (FastAPI + uvicorn), `otel` (OpenTelemetry),
+`pydantic`, `all`.
 See [Installation](https://manas-thakur.github.io/agentcore/docs/installation/).
 
 ## Usage

@@ -35,10 +35,11 @@ class TeamResult:
     plan: Plan | None = None
     results: dict[str, AgentOutput] = field(default_factory=dict)
     messages: list[dict[str, Any]] = field(default_factory=list)
+    error: str | None = None  # set when a member failed (the first failure)
 
     @property
     def success(self) -> bool:
-        return all(r.success for r in self.results.values())
+        return self.error is None and all(r.success for r in self.results.values())
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -47,7 +48,15 @@ class TeamResult:
             "plan": self.plan.to_dict() if self.plan else None,
             "results": {k: v.to_dict() for k, v in self.results.items()},
             "messages": self.messages,
+            "error": self.error,
         }
+
+
+def _first_failure(results: dict[str, AgentOutput]) -> str | None:
+    for key, r in results.items():
+        if not r.success:
+            return f"{key} ({r.agent}) failed: {r.error or 'no output'}"
+    return None
 
 
 class ManagerWorker:
@@ -89,7 +98,9 @@ class ManagerWorker:
                 for task_id, out in await asyncio.gather(*(do(t) for t in wave)):
                     results[task_id] = out
             output = self.synthesize(goal, plan, results)
-        return TeamResult(goal, output, plan, results, self.bus.transcript())
+        return TeamResult(
+            goal, output, plan, results, self.bus.transcript(), _first_failure(results)
+        )
 
     @staticmethod
     def synthesize(goal: str, plan: Plan, results: dict[str, AgentOutput]) -> str:
@@ -119,15 +130,21 @@ class Pipeline:
         results: dict[str, AgentOutput] = {}
         context: dict[str, Any] | None = None
         prev = "user"
-        with get_tracer().span("team.pipeline", {"task": task[:300]}):
+        error: str | None = None
+        with get_tracer().span("team.pipeline", {"task": task[:300]}) as span:
             for a in self.agents:
                 reply = await self.bus.request(prev, a.name, {"task": task, "context": context})
                 out = _from_reply(reply, a.name, task)
                 results[a.name] = out
+                if not out.success:
+                    # later stages would only see empty input: stop and report the failure
+                    error = f"{a.name} failed: {out.error or 'no output'}"
+                    span.record_error(error)
+                    break
                 context = {a.name: out.output}
                 prev = a.name
-        final = results[self.agents[-1].name].output if self.agents else ""
-        return TeamResult(task, final, None, results, self.bus.transcript())
+        final = results[self.agents[-1].name].output if self.agents and error is None else ""
+        return TeamResult(task, final, None, results, self.bus.transcript(), error)
 
 
 async def peer_review(

@@ -253,7 +253,10 @@ class ReviewerAgent(SpecializedAgent):
         if context and not work:
             work = "\n\n".join(str(v) for v in context.values())
         resp = await self.model.generate(
-            [Message.system(self.system_prompt()), Message.user(self.build_task(task, context))]
+            [
+                Message.system(self.system_prompt_text()),
+                Message.user(self.build_task(task, context)),
+            ]
         )
         if self.cost_tracker is not None:
             self.cost_tracker.record(
@@ -388,7 +391,9 @@ class PlannerAgent(SpecializedAgent):
         return Plan(goal, tasks) if tasks else self.heuristic_plan(goal)
 
     async def plan(self, goal: str) -> Plan:
-        resp = await self.model.generate([Message.system(self.system_prompt()), Message.user(goal)])
+        resp = await self.model.generate(
+            [Message.system(self.system_prompt_text()), Message.user(goal)]
+        )
         if self.cost_tracker is not None:
             self.cost_tracker.record(
                 self.model.model_id,

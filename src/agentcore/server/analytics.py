@@ -188,7 +188,11 @@ def explore(
     buckets: int = 48,
 ) -> dict[str, Any]:
     """Everything the trace explorer needs in one pass: a page of rows, the total, facet
-    counts, a volume histogram and latency/cost percentiles for the quick filters."""
+    counts, a volume histogram and latency/cost percentiles for the quick filters.
+
+    total, histogram and stats cover the traces that match query inside the
+    time window; facets count values over the window (with the query applied to the
+    other fields) so the facet panel can show alternatives."""
     tq = parse_query(query)
     everything = store.list(None)
     windowed = in_window(everything, since, until)
@@ -201,7 +205,7 @@ def explore(
         "facets": facet_counts(windowed, tq),
         "histogram": histogram(hist_items, since=since, until=until, buckets=buckets),
         "window": {"since": since, "until": until},
-        "stats": trace_stats(windowed),
+        "stats": trace_stats(hist_items),  # the traces matching the query in the window
     }
 
 

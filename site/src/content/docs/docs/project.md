@@ -91,7 +91,9 @@ agentcore eval --suite evals/basic.yaml --model mock
 Result: 3/3 passed (100%), mean score 1.00, 537 tokens
 ```
 
-Gate CI on it with `--fail-under 1.0`, or keep a baseline and fail on regressions:
+Gate CI on it: by default every case must pass (`--fail-under 1.0`; use e.g. `--fail-under 0.9`
+to tolerate some failures). Or keep a baseline and fail on regressions; the first command writes
+it, and the second fails with exit 2 if the baseline file is missing:
 
 ```bash
 agentcore eval --suite evals/basic.yaml --model mock --baseline eval-baseline.json --save-baseline

@@ -1,12 +1,15 @@
-"""Documents, chunks and loaders (text, markdown, HTML, JSONL, directories)."""
+"""Documents, chunks and loaders (text, markdown/MDX, HTML, JSONL, directories)."""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 
 @dataclass
@@ -67,7 +70,53 @@ class Chunk:
 
 
 TEXT_SUFFIXES = {".txt", ".md", ".markdown", ".rst", ".py", ".json", ".yaml", ".yml", ".csv"}
+MARKDOWN_SUFFIXES = {".md", ".markdown", ".mdx"}
 HTML_SUFFIXES = {".html", ".htm"}
+
+_FRONT_MATTER = re.compile(
+    r"\A\ufeff?---[ \t]*\r?\n(.*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|\Z)", re.S
+)
+_FENCE = re.compile(r"^\s*(```|~~~)")
+_ALT_TAG = re.compile(r"<[A-Za-z][\w.:-]*\b[^<>]*?\balt=(?:\"([^\"]*)\"|'([^']*)')[^<>]*>")
+_JSX_TAG = re.compile(r"</?[A-Za-z][\w.:-]*(?:\s(?:[^<>{}]|\{[^{}]*\})*)?/?>|<>|</>")
+_JSX_COMMENT = re.compile(r"\{/\*.*?\*/\}", re.S)
+
+
+def split_front_matter(text: str) -> tuple[dict[str, Any], str]:
+    """Split leading YAML front matter (``---`` ... ``---``) from markdown text."""
+    m = _FRONT_MATTER.match(text)
+    if not m:
+        return {}, text
+    try:
+        data = yaml.safe_load(m.group(1))
+    except yaml.YAMLError:
+        return {}, text
+    if not isinstance(data, dict):
+        return {}, text
+    return data, text[m.end() :]
+
+
+def mdx_to_markdown(text: str) -> str:
+    """Strip MDX syntax: ``import``/``export`` lines, JSX comments and tags (keeping alt text
+    and the text between tags). Code blocks are left untouched."""
+    out: list[str] = []
+    in_fence = False
+    for line in text.splitlines():
+        if _FENCE.match(line):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        if in_fence:
+            out.append(line)
+            continue
+        if re.match(r"^(import|export)\s", line):
+            continue
+        line = _JSX_COMMENT.sub("", line)
+        line = _ALT_TAG.sub(lambda m: m.group(1) or m.group(2) or "", line)
+        line = _JSX_TAG.sub("", line)
+        out.append(line)
+    cleaned = "\n".join(out)
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip() + "\n"
 
 
 def load_file(path: str | Path) -> list[Document]:
@@ -82,32 +131,41 @@ def load_file(path: str | Path) -> list[Document]:
                 docs.append(
                     Document(
                         text,
-                        source=f"{p}:{i}",
+                        source=f"{p.as_posix()}:{i}",
                         metadata={"title": rec.get("title", f"{p.stem}:{i}"), **rec},
                     )
                 )
         return docs
     raw = p.read_text(encoding="utf-8", errors="replace")
-    meta: dict[str, Any] = {"source": str(p), "format": p.suffix.lstrip(".") or "txt"}
-    if p.suffix in HTML_SUFFIXES:
+    source = p.as_posix()  # forward slashes on every OS (stable ids, readable citations)
+    suffix = p.suffix.lower()
+    meta: dict[str, Any] = {"source": source, "format": suffix.lstrip(".") or "txt"}
+    if suffix in HTML_SUFFIXES:
         from agentcore.tools.builtins.web import html_to_text
 
         title, raw = html_to_text(raw)
         meta["title"] = title or p.stem
-    elif p.suffix in (".md", ".markdown"):
-        for line in raw.splitlines():
-            if line.startswith("# "):
-                meta["title"] = line[2:].strip()
-                break
+    elif suffix in MARKDOWN_SUFFIXES:
+        front, raw = split_front_matter(raw)
+        if suffix == ".mdx":
+            raw = mdx_to_markdown(raw)
+        for key in ("title", "description"):
+            if isinstance(front.get(key), (str, int, float)) and str(front[key]).strip():
+                meta[key] = str(front[key]).strip()
+        if "title" not in meta:
+            for line in raw.splitlines():
+                if line.startswith("# "):
+                    meta["title"] = line[2:].strip()
+                    break
     meta.setdefault("title", p.stem)
-    return [Document(raw, source=str(p), metadata=meta)]
+    return [Document(raw, source=source, metadata=meta)]
 
 
 def load_directory(
     path: str | Path, pattern: str = "**/*", suffixes: set[str] | None = None
 ) -> list[Document]:
     """Recursively load every supported file under ``path``."""
-    allowed = suffixes or (TEXT_SUFFIXES | HTML_SUFFIXES | {".jsonl"})
+    allowed = suffixes or (TEXT_SUFFIXES | MARKDOWN_SUFFIXES | HTML_SUFFIXES | {".jsonl"})
     docs: list[Document] = []
     for p in sorted(Path(path).glob(pattern)):
         if p.is_file() and p.suffix.lower() in allowed:

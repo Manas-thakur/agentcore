@@ -49,6 +49,9 @@ class AgentConfig:
     context_window: int | None = None  # enable ContextManager truncation when set
     max_tool_output_tokens: int = 2000
     trace_content: bool = True  # record model inputs/outputs (truncated) on model.generate spans
+    # Errors during a run (e.g. ModelError: the model server is down) end the run with
+    # stop_reason="error" and AgentResult.error set. raise_on_error=True re-raises instead.
+    raise_on_error: bool = False
 
 
 @dataclass
@@ -161,6 +164,15 @@ class Agent:
     @property
     def tracer(self) -> Tracer:
         return self._tracer or get_tracer()
+
+    @property
+    def metric_label(self) -> str:
+        """Bounded ``agent`` metric label: the name up to the first ``:``.
+
+        Eval agents are named ``eval:<case>``; their metrics are labelled ``agent="eval"``
+        so the number of series does not grow with the number of cases.
+        """
+        return self.name.split(":", 1)[0] or self.name
 
     def on(self, callback: Callback) -> Callback:
         """Register an event callback (usable as a decorator)."""
@@ -418,13 +430,17 @@ class Agent:
     async def run(
         self, task: str | list[Message], *, callbacks: list[Callback] | None = None
     ) -> AgentResult:
-        """Run the agent on a task (a string, or a full message list)."""
+        """Run the agent on a task (a string, or a full message list).
+
+        Never raises for model or tool failures: the result has ``stop_reason="error"`` and
+        ``error`` set (unless the agent was created with ``raise_on_error=True``).
+        """
         sink: list[AgentEvent] = []
         extra = list(callbacks or [])
         state: dict[str, Any] = {}
         start = time.perf_counter()
         task_preview = task if isinstance(task, str) else (task[-1].content if task else "")
-        get_metrics().counter("agentcore_agent_runs_total", labels={"agent": self.name})
+        get_metrics().counter("agentcore_agent_runs_total", labels={"agent": self.metric_label})
         with self.tracer.span(
             f"agent.run:{self.name}",
             {"agent.name": self.name, "task": task_preview[:500], "model": self.model.model_id},
@@ -451,10 +467,21 @@ class Agent:
                 )
             except Exception as exc:
                 span.record_error(exc)
+                message = f"{type(exc).__name__}: {exc}"
                 await self._emit(
-                    AgentEvent("error", state.get("step", 0), {"error": str(exc)}), sink, extra
+                    AgentEvent("error", state.get("step", 0), {"error": message}), sink, extra
                 )
-                raise
+                if self.config.raise_on_error:
+                    raise
+                result = AgentResult(
+                    "",
+                    state.get("messages", []),
+                    state.get("step", 0),
+                    state.get("usage", Usage()),
+                    state.get("tool_results", []),
+                    "error",
+                    error=message,
+                )
             result.duration_ms = (time.perf_counter() - start) * 1000
             result.trace_id = current_trace_id()
             span.set_attributes(
@@ -515,7 +542,10 @@ class Agent:
         from agentcore.tools.decorator import Tool
 
         async def delegate(task: str) -> str:
-            return (await self.run(task)).output
+            result = await self.run(task)
+            if result.stop_reason == "error":
+                raise RuntimeError(f"{self.name} failed: {result.error}")
+            return result.output
 
         return Tool(
             name=name or self.name,

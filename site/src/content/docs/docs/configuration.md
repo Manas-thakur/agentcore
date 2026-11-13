@@ -32,6 +32,11 @@ max_body_kb = 1024
 Secrets never go in the file: an `api_key` key under `[server]` is rejected with an error. Use the
 `AGENTCORE_API_KEY` environment variable instead.
 
+The file is validated: unknown top-level keys and unknown `[server]` keys are errors (with a
+suggestion, e.g. `unknown [server] keys: 'prot' (did you mean 'port'?)`), `port` must be an
+integer from 1 to 65535 and `max_body_kb` a positive integer. Every command reports these as
+`error: ...` and exits 2 (`agentcore doctor` lists them as a failed check).
+
 ## Reference
 
 | Setting | `agentcore.toml` | Environment | CLI | Default |

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from agentcore.eval import EvalRun, EvalRunner, compare, load_suite
-from agentcore.eval.suite import EvalSuite
+from agentcore.eval.suite import EvalSuite, SuiteError, read_suite_file
 
 SUITE_SUFFIXES = (".yaml", ".yml", ".json")
 
@@ -23,7 +23,7 @@ def slugify(text: str) -> str:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
 def _display_path(path: Path) -> str:
@@ -31,6 +31,23 @@ def _display_path(path: Path) -> str:
         return path.resolve().relative_to(Path.cwd().resolve()).as_posix()
     except ValueError:
         return path.resolve().as_posix()
+
+
+def _is_history_file(path: Path, history_root: Path) -> bool:
+    """``<state>/evals/<suite>/runs/<id>.json`` or ``<state>/evals/<suite>/baseline.json``."""
+    if path.parent.name == "runs":
+        return path.parent.parent.parent == history_root
+    return path.name == "baseline.json" and path.parent.parent == history_root
+
+
+def _elapsed(started_at: str | None, finished_at: str | None) -> float | None:
+    """Seconds from start to finish (or to now while the run is still going)."""
+    try:
+        start = datetime.fromisoformat(started_at).timestamp() if started_at else None
+        end = datetime.fromisoformat(finished_at).timestamp() if finished_at else time.time()
+    except ValueError:
+        return None
+    return None if start is None else round(max(end - start, 0.0), 1)
 
 
 @dataclass
@@ -70,7 +87,15 @@ class EvalJob:
         return data
 
 
-STARTER_SUITE_YAML = """# Starter eval suite created from the AgentCore dashboard.
+class EvalDirError(OSError):
+    """The eval directory cannot be written (e.g. permission denied in a container)."""
+
+
+class AmbiguousSuiteError(ValueError):
+    """Several suite files share the requested name."""
+
+
+STARTER_SUITE_YAML = """# Starter eval suite created from the AgentCore web app.
 #
 #   agentcore eval --suite evals/starter.yaml --model mock
 #
@@ -129,6 +154,7 @@ class EvalManager:
     def discover(self) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         seen: set[Path] = set()
+        history_root = self.root.resolve()
         for d in self.dirs:
             root = Path(d)
             if not root.is_dir():
@@ -137,18 +163,21 @@ class EvalManager:
                 if path.suffix.lower() not in SUITE_SUFFIXES or not path.is_file():
                     continue
                 rp = path.resolve()
-                if rp in seen:
-                    continue
+                if rp in seen or _is_history_file(rp, history_root):
+                    continue  # already listed, or eval history stored next to the suites
                 seen.add(rp)
-                info: dict[str, Any] = {"path": _display_path(path), "dir": d}
+                info: dict[str, Any] = {"path": _display_path(path), "dir": _display_path(root)}
                 try:
-                    suite = load_suite(path)
-                except Exception as exc:  # malformed files are listed, not fatal
-                    info.update(name=path.stem, error=f"{type(exc).__name__}: {exc}", cases=0)
+                    data = read_suite_file(path)
+                    if not isinstance(data, dict) or "cases" not in data:
+                        continue  # e.g. a JSON report or cassette that happens to live here
+                    suite = EvalSuite.from_dict(data, info["path"])
+                except (OSError, SuiteError) as exc:  # malformed files are listed, not fatal
+                    info.update(name=path.stem, error=str(exc), cases=0)
                     out.append(info)
                     continue
                 if not suite.cases:
-                    continue  # e.g. a JSON report or cassette that happens to live here
+                    continue
                 info.update(
                     name=suite.name,
                     description=suite.description,
@@ -161,28 +190,55 @@ class EvalManager:
                 info["last_run"] = next(iter(self.history(suite.name, limit=1)), None)
                 info["baseline"] = self.baseline_id(suite.name)
                 out.append(info)
+        names = [s["name"] for s in out if not s.get("error")]
+        for s in out:
+            if not s.get("error") and names.count(s["name"]) > 1:
+                s["duplicate_name"] = True  # run it by path; the name is ambiguous
         return out
 
     def create_starter(self) -> dict[str, Any]:
         """Write a small calculator suite into the first eval directory.
 
-        Gives people who installed from PyPI (and so have no ``examples/``) a
-        suite to run from the dashboard straight away. Never overwrites a file.
+        Gives people without the repository's ``examples/`` a suite to run from the web
+        app straight away. Never overwrites a file. Raises :class:`EvalDirError` when the
+        directory is not writable (e.g. a read-only container working directory).
         """
         if not self.dirs:
             raise ValueError("No eval directories are configured")
         target = Path(self.dirs[0]) / "starter.yaml"
         if target.exists():
             raise FileExistsError(f"{_display_path(target)} already exists")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(STARTER_SUITE_YAML, encoding="utf-8")
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with target.open("x", encoding="utf-8") as fh:
+                fh.write(STARTER_SUITE_YAML)
+        except FileExistsError:
+            raise FileExistsError(f"{_display_path(target)} already exists") from None
+        except OSError as exc:
+            reason = (exc.strerror or type(exc).__name__).lower()
+            raise EvalDirError(
+                f"cannot write to {_display_path(target.parent)}: {reason}; set eval_dirs in "
+                "agentcore.toml (or AGENTCORE_EVAL_DIRS) to a writable folder"
+            ) from exc
         return {"path": _display_path(target), "name": load_suite(target).name}
 
     def _find_suite(self, ref: str) -> Path:
-        for s in self.discover():
-            if ref in (s["path"], s["name"]) and not s.get("error"):
+        suites = [s for s in self.discover() if not s.get("error")]
+        for s in suites:
+            if ref == s["path"]:
                 return Path(s["path"])
-        raise KeyError(f"eval suite {ref!r} not found in {self.dirs}")
+        named = [s for s in suites if ref == s["name"]]
+        if len(named) > 1:
+            paths = ", ".join(s["path"] for s in named)
+            raise AmbiguousSuiteError(
+                f"suite name {ref!r} is used by several files ({paths}); run one by its path"
+            )
+        if named:
+            return Path(named[0]["path"])
+        broken = [s for s in self.discover() if s.get("error") and ref in (s["path"], s["name"])]
+        if broken:
+            raise SuiteError(broken[0]["error"])
+        raise KeyError(f"eval suite {ref!r} not found; GET /api/evals/suites lists the suites")
 
     # --- running ------------------------------------------------------------------------
     def start(
@@ -418,11 +474,5 @@ class EvalManager:
                     },
                 }
         data.pop("report", None)
-        data["elapsed_s"] = None
-        if job is not None and job.status in ("queued", "running"):
-            try:
-                started = datetime.fromisoformat(job.started_at)
-                data["elapsed_s"] = round(time.time() - started.timestamp(), 1)
-            except ValueError:
-                pass
+        data["elapsed_s"] = _elapsed(data.get("started_at"), data.get("finished_at"))
         return data

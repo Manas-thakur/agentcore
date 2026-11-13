@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import re
 import time
 from collections.abc import AsyncIterator, Callable
@@ -234,6 +235,63 @@ def parse_numbered_sources(text: str) -> dict[int, str]:
     return sources
 
 
+_JUDGE_RE = re.compile(
+    r"impartial judge.*?Task given to the assistant:\n(?P<task>.*?)\n\n"
+    r"(?:Reference answer:\n(?P<ref>.*?)\n\n)?Assistant's answer:\n(?P<answer>.*?)\n\n"
+    r"Score each criterion from 0 to 10:\n(?P<criteria>.*?)\n\nRespond with ONLY",
+    re.S,
+)
+
+
+def judge_answer(prompt: str) -> str | None:
+    """Answer an LLM-as-judge prompt with valid JSON (deterministic, offline).
+
+    Every criterion gets 10 when the answer contains the reference answer (or there is no
+    reference and the answer is non-empty), 2 otherwise.
+    """
+    m = _JUDGE_RE.search(prompt)
+    if m is None:
+        return None
+    criteria = [
+        line[2:].strip() for line in m.group("criteria").splitlines() if line.startswith("- ")
+    ]
+    answer = " ".join(m.group("answer").lower().split())
+    ref = " ".join((m.group("ref") or "").lower().split()).strip(" .")
+    if ref:
+        ok = ref in answer
+        why = "the answer contains the reference" if ok else "the answer lacks the reference"
+    else:
+        ok = bool(answer) and answer != "(no answer)"
+        why = "an answer was given" if ok else "no answer was given"
+    score = 10 if ok else 2
+    return json.dumps(
+        {"scores": dict.fromkeys(criteria, score), "reasoning": f"mock judge: {why}."}
+    )
+
+
+# The runtime's REFLECTION_PROMPT (agentcore.runtime.agent) starts with this.
+_REFLECTION_PROMPT_START = "Pause and reflect before continuing."
+_NOT_FOUND_RE = re.compile(
+    r"^(no\b|none\b|nothing\b|not found\b|unknown\b|could not\b|couldn't\b|unable\b)", re.I
+)
+
+
+def _sentence(text: str) -> str:
+    """``text`` with exactly one closing punctuation mark."""
+    text = text.strip()
+    return text if text.endswith((".", "!", "?")) else f"{text}."
+
+
+def _reflection(history: list[Message]) -> str:
+    calls = [tc.name for m in history if m.role == "assistant" for tc in m.tool_calls]
+    if not calls:
+        return "No tools have been used yet; answer directly if no tool is needed."
+    return (
+        f"So far {len(calls)} tool call(s) ran ({', '.join(dict.fromkeys(calls))}). "
+        "Their results are available, so the next step is the final answer."
+    )
+
+
 def _tool_names(tools: ToolSpecs | None) -> dict[str, dict[str, Any]]:
     out = {}
     for t in tools or []:
@@ -305,10 +363,28 @@ class MockModel(ModelClient):
 
     # The policy ---------------------------------------------------------------
     def respond(self, messages: list[Message], tools: ToolSpecs | None) -> Message:
-        last_user = max((i for i, m in enumerate(messages) if m.role == "user"), default=-1)
+        if (
+            messages
+            and messages[-1].role == "user"
+            and messages[-1].content.startswith(_REFLECTION_PROMPT_START)
+        ):
+            return Message.assistant(_reflection(messages[:-1]))
+        # "[reflection] ..." notes the agent adds between steps are not new tasks.
+        last_user = max(
+            (
+                i
+                for i, m in enumerate(messages)
+                if m.role == "user" and not m.content.startswith("[reflection]")
+            ),
+            default=-1,
+        )
         task = messages[last_user].content if last_user >= 0 else ""
         observations = [m for m in messages[last_user + 1 :] if m.role == "tool"]
         available = _tool_names(tools)
+
+        judged = judge_answer(task) if "impartial judge" in task else None
+        if judged is not None:
+            return Message.assistant(judged)
 
         if observations:
             return Message.assistant(self._final_from_observations(task, observations))
@@ -379,9 +455,13 @@ class MockModel(ModelClient):
     def _final_from_observations(task: str, observations: list[Message]) -> str:
         outputs = [o.content.strip() for o in observations]
         if len(outputs) == 1 and len(outputs[0]) <= 200 and "\n" not in outputs[0]:
-            if outputs[0].startswith("ERROR"):
-                return f"The tool reported an error: {outputs[0]}"
-            return f"The answer is {outputs[0]}."
+            out = outputs[0]
+            if out.startswith("ERROR"):
+                return f"The tool reported an error: {out}"
+            if _NOT_FOUND_RE.match(out):
+                tool = observations[0].name or "the tool"
+                return f"I could not find an answer with {tool}: {_sentence(out)}"
+            return f"The answer is {_sentence(out)}"
         sources: dict[int, str] = {}
         for o in outputs:
             for n, text in parse_numbered_sources(o).items():

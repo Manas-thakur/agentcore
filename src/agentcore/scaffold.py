@@ -153,7 +153,8 @@ A tool-using agent built with [AgentCore](https://github.com/Manas-thakur/agentc
 Everything below runs offline with the deterministic `mock` model.
 
 ```bash
-pip install "agentcore[server]"
+# AgentCore installs from GitHub (the `agentcore` package on PyPI is a different project)
+pip install "agentcore[server] @ git+https://github.com/Manas-thakur/agentcore"
 
 python agent.py --model mock "What is the capital of France?"
 agentcore eval --suite evals/basic.yaml --model mock

@@ -21,6 +21,7 @@ Example ``agentcore.toml``::
 
 from __future__ import annotations
 
+import difflib
 import importlib
 import importlib.util
 import os
@@ -42,6 +43,16 @@ DEFAULT_SERVER_TOOLS = ["calculator", "current_time"]
 
 class ConfigError(ValueError):
     """Raised for an unreadable or invalid configuration file."""
+
+
+class UnknownToolError(ConfigError, KeyError):
+    """A tool name that is neither a built-in nor defined in a tool module.
+
+    Subclasses ``KeyError`` for backwards compatibility with code that caught it before.
+    """
+
+    def __str__(self) -> str:
+        return str(self.args[0]) if self.args else ""
 
 
 @dataclass
@@ -94,6 +105,18 @@ class Config:
             "eval_dirs": list(self.eval_dirs),
             "server": self.server.to_dict(),
         }
+
+
+SERVER_KEYS = ("host", "port", "cors_origins", "max_body_kb")
+
+
+def _int_value(value: Any, key: str, minimum: int, maximum: int | None = None) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ConfigError(f"{key!r} must be an integer, got {value!r}")
+    if value < minimum or (maximum is not None and value > maximum):
+        bound = f"between {minimum} and {maximum}" if maximum is not None else f">= {minimum}"
+        raise ConfigError(f"{key!r} must be {bound}, got {value}")
+    return value
 
 
 def _str_list(value: Any, key: str) -> list[str]:
@@ -181,16 +204,25 @@ def _apply_file(cfg: Config, data: dict[str, Any], base: Path) -> None:
     server = data.get("server", section.get("server")) or {}
     if not isinstance(server, dict):
         raise ConfigError("[server] must be a table")
-    s = cfg.server
-    s.host = str(server.get("host", s.host))
-    s.port = int(server.get("port", s.port))
-    s.cors_origins = _str_list(server.get("cors_origins"), "server.cors_origins")
-    if "max_body_kb" in server:
-        s.max_body_bytes = int(server["max_body_kb"]) * 1024
     if "api_key" in server:
         raise ConfigError(
             "do not put secrets in agentcore.toml; set the AGENTCORE_API_KEY environment variable"
         )
+    unknown_server = sorted(set(server) - set(SERVER_KEYS))
+    if unknown_server:
+        hints = []
+        for k in unknown_server:
+            close = difflib.get_close_matches(k, SERVER_KEYS, n=1)
+            hints.append(f"{k!r}" + (f" (did you mean {close[0]!r}?)" if close else ""))
+        raise ConfigError(
+            f"unknown [server] keys: {', '.join(hints)}; allowed: {', '.join(SERVER_KEYS)}"
+        )
+    s = cfg.server
+    s.host = str(server.get("host", s.host))
+    s.port = _int_value(server.get("port", s.port), "server.port", 1, 65535)
+    s.cors_origins = _str_list(server.get("cors_origins"), "server.cors_origins")
+    if "max_body_kb" in server:
+        s.max_body_bytes = _int_value(server["max_body_kb"], "server.max_body_kb", 1) * 1024
 
 
 def apply_env(cfg: Config) -> None:
@@ -276,5 +308,5 @@ def resolve_tools(
             out.extend(builtin_tools([name], workspace=workspace))
         else:
             available = sorted(set(BUILTIN_NAMES) | set(extra))
-            raise KeyError(f"unknown tool {name!r}; available: {available}")
+            raise UnknownToolError(f"unknown tool {name!r}; available: {available}")
     return out

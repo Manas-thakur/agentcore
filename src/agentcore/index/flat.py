@@ -14,6 +14,7 @@ from agentcore.index.base import (
     as_matrix,
     scores_for,
     top_k,
+    unique_batch,
 )
 
 
@@ -36,9 +37,9 @@ class FlatIndex(VectorIndex):
     def add(
         self, vectors: Any, ids: list[str], metadata: list[dict[str, Any]] | None = None
     ) -> None:
-        vecs = self._prep(as_matrix(vectors, self.dimension))
-        if len(ids) != len(vecs):
-            raise ValueError("number of ids must match number of vectors")
+        vecs, ids, metadata = unique_batch(
+            self._prep(as_matrix(vectors, self.dimension)), ids, metadata
+        )
         new_rows, new_ids = [], []
         for vec, id_ in zip(vecs, ids):
             if id_ in self._pos:  # upsert

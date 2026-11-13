@@ -59,8 +59,10 @@ The generated schema for `distance`:
 }
 ```
 
-`tool(fn=None, *, name, description, category="general", timeout=30.0, retries=0, strict=False,
-**metadata)`. Supported parameter types: `str`, `int`, `float`, `bool`, `list[...]`,
+`tool(fn=None, *, name, description, category="general", timeout=30.0, retries=None,
+strict=False, **metadata)`. `retries=None` (the default) uses the engine's
+`RetryPolicy.max_retries` (2); `retries=0` disables retries for that tool; `retries=N` allows N
+retries. Supported parameter types: `str`, `int`, `float`, `bool`, `list[...]`,
 `dict[str, ...]`, `Optional`, `Union`, `Literal`, `Enum`, dataclasses, `TypedDict` and (with the
 `pydantic` extra) pydantic models. Descriptions come from Google-, NumPy- or Sphinx-style
 docstrings. Sync and async functions both work.
@@ -74,9 +76,16 @@ rate_limits, before, after)`:
   `float`, nested objects become dataclasses. Invalid input returns a `ToolValidationError` result
   the model can read and correct.
 - **Timeouts and retries** per tool (`timeout`, `retries`) with an exponential-backoff
-  `RetryPolicy` (by default it retries timeouts and rate-limit errors).
+  `RetryPolicy` (by default it retries timeouts, rate-limit errors and `ToolTransientError`).
 - **Rate limits** with token buckets (`rate_limits={"http_get": TokenBucket(...)}`).
-- **Hooks**: `before(name, args)` and `after(result)` callbacks, e.g. for audit logs.
+- **Hooks**: `before` and `after` each take a single callable or a list of callables, sync or
+  async. `before(name, kwargs)` runs after validation, before the tool; `after(result)` gets every
+  `ToolResult`, e.g. for audit logs:
+
+  ```python
+  engine = ExecutionEngine(registry, before=lambda name, kwargs: print("->", name, kwargs),
+                           after=[audit_log, metrics_hook])
+  ```
 - **Results**, not exceptions: `ToolResult(success, output, error, error_type, latency_ms,
   attempts)`. `result.as_text(n)` gives the size-bounded text the model sees.
 
@@ -84,8 +93,26 @@ rate_limits, before, after)`:
 
 `SubprocessSandbox(SandboxConfig(...))` runs Python in an isolated interpreter in a temporary
 directory with a timeout, POSIX resource limits (memory, CPU time), network access disabled (unless
-`network_access=True`) and an optional import allow-list. `python_exec` uses it. This is best-effort isolation: use containers
-for untrusted, multi-tenant code.
+`network_access=True`), an optional import allow-list (`allowed_imports`) and deny-list
+(`blocked_imports`). Both lists apply to imports written in the sandboxed code; the standard
+library's own imports keep working. This is best-effort isolation: use containers for untrusted,
+multi-tenant code.
+
+The built-in `python_exec` tool uses the sandbox with a deny-list of modules that reach the OS,
+processes or the network (`os`, `subprocess`, `socket`, `shutil`, `ctypes`, `multiprocessing`,
+`signal`, `importlib`, ...: `agentcore.tools.builtins.python_exec.DEFAULT_BLOCKED_IMPORTS`). Build
+your own variant with `make_python_exec(SandboxConfig(...))`: `blocked_imports=[]` lifts the
+deny-list, `allowed_imports=["math", "statistics"]` switches to an allow-list. Code that runs past
+the sandbox timeout (10 s by default) is a failed call (`success=False`,
+`error_type="ToolTimeoutError"`, with any output produced so far) and is not retried.
+
+:::caution[Windows limitations]
+Windows has no `resource` module, so `memory_limit_mb` and `cpu_time_seconds` are **not
+enforced** there; only the wall-clock timeout, the network block and the import lists apply. The
+import lists are a speed bump, not a security boundary (sandboxed code can still reach the OS
+through objects it already has). On Windows, and for any untrusted code, run AgentCore in a
+container (see [Deployment](/agentcore/docs/deployment/)).
+:::
 
 ## Built-in tools
 

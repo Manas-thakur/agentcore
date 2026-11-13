@@ -3,7 +3,8 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
-// The build lands inside the Python package so `pip install agentcore[server]` ships the web
+// The build lands inside the Python package, so installing it
+// (`pip install "agentcore[server] @ git+https://github.com/Manas-thakur/agentcore"`) ships the web
 // app with no Node.js needed. FastAPI serves index.html at "/" (with an SPA fallback for the
 // app's routes) and the hashed assets under /static/.
 const API = process.env.AGENTCORE_URL || "http://127.0.0.1:8761";

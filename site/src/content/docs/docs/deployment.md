@@ -10,8 +10,16 @@ directory.
 ## Docker
 
 The release image `ghcr.io/manas-thakur/agentcore` (linux/amd64 and linux/arm64) runs
-`agentcore serve --host 0.0.0.0 --port 8000` as a non-root user, keeps state in `/data` and has a
-health check on `/health`.
+`agentcore serve --host 0.0.0.0 --port 8000` as a non-root user (uid 1000) from its working
+directory `/data`, which that user owns, and has a health check on `/health`. Everything the
+server writes lands under `/data`: traces (`/data/traces`), sessions, eval history and suites
+created from the web app (`/data/evals`, e.g. the starter suite). The example suites are in
+`/data/examples/evals`. Mount a volume at `/data` to keep state across container restarts.
+
+The image does **not** set `AGENTCORE_MODEL`, because an environment variable would override
+`model` in a mounted project's `agentcore.toml`. Without either, the default is `auto` (Ollama if
+it is reachable and has the model, otherwise the offline mock model). Pass
+`-e AGENTCORE_MODEL=...` to choose one. The image sets `AGENTCORE_TRACE_DIR=/data/traces`.
 
 ```bash
 docker run -d --name agentcore -p 8000:8000 \
@@ -31,6 +39,25 @@ docker run -d -p 8000:8000 -v "$PWD":/project -w /project \
   -e AGENTCORE_TRACE_DIR=/project/.agentcore/traces \
   ghcr.io/manas-thakur/agentcore:0.3.0 agentcore serve --host 0.0.0.0 --port 8000
 ```
+
+The project's `agentcore.toml` (model, tools, tool modules, eval dirs) is used as is. The server
+runs as uid 1000, so the mounted folder must be writable by that user for traces, sessions and
+suites created from the web app (on Linux: `chown -R 1000 .agentcore evals`, or keep state in a
+volume with `-e AGENTCORE_TRACE_DIR=/data/traces -v agentcore-data:/data`). If a directory is not
+writable, the web app says so (`cannot write to evals: permission denied; set eval_dirs ...`).
+
+:::note[Git Bash on Windows]
+Git Bash (MSYS) rewrites arguments that look like Unix paths, so `-v "$PWD":/project -w /project`
+arrives as `C:/Program Files/Git/project`. Disable the conversion for the command, or pass a
+Windows-style path:
+
+```bash
+MSYS_NO_PATHCONV=1 docker run -d -p 8000:8000 -v "$(pwd -W)":/project -w /project \
+  ghcr.io/manas-thakur/agentcore:0.3.0 agentcore serve --host 0.0.0.0 --port 8000
+```
+
+PowerShell and cmd.exe are not affected (use `${PWD}` or `%cd%`).
+:::
 
 ## docker compose with Ollama
 

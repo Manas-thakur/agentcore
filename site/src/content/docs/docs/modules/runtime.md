@@ -53,13 +53,18 @@ The answer is 395. final 174
 cost_tracker, engine, **config_overrides)`. Keyword overrides set `AgentConfig` fields, for
 example `max_steps` (default 10), `timeout_seconds`, `stuck_threshold` (identical tool calls
 before the agent is nudged), `reflect_every`, `context_window`, `max_tool_output_tokens`,
-`parallel_tool_calls`, `stream`, `temperature`, `max_tokens` and `trace_content`.
+`parallel_tool_calls`, `stream`, `temperature`, `max_tokens`, `trace_content` and
+`raise_on_error`.
 
 - `await agent.run(task)` is the async API; `agent.run_sync(task)` wraps it. A task is a string or
   a list of `Message`s.
 - `AgentResult` has `output`, `stop_reason` (`final`, `max_steps`, `timeout` or `error`),
   `steps`, `usage`, `tool_results`, `tool_calls`, `trace_id`, `duration_ms`, `error`, the full
   `messages` and the recorded `events`.
+- `run()` does not raise when the model (or anything else in the loop) fails, for example when the
+  model server is down: the result has `stop_reason="error"`, an empty `output` and
+  `error="ModelError: ..."`, and an `error` event is emitted before `run_end`. Pass
+  `raise_on_error=True` to get the exception instead (the HTTP server does this to answer 502).
 - `agent.as_tool()` turns an agent into a tool for another agent.
 - `reflect_every=N` adds periodic self-reflection; `reflection_hook=fn` lets you inject your own.
 - `trace_content=False` stops model spans from recording prompts and responses.

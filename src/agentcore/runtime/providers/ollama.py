@@ -169,7 +169,8 @@ class OllamaClient(ModelClient):
             ):
                 if resp.status_code >= 400:
                     body = await resp.aread()
-                    raise ModelError(f"HTTP {resp.status_code}: {body[:500]!r}")
+                    text = body.decode("utf-8", "replace")[:500]
+                    raise ModelError(f"HTTP {resp.status_code}: {text}")
                 async for line in resp.aiter_lines():
                     if not line.strip():
                         continue

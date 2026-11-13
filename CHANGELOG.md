@@ -6,6 +6,87 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Install hints no longer point at PyPI.** The `agentcore` package on PyPI is a different
+  project. The CLI, `agentcore doctor`, the server's missing-extra error, generated project READMEs
+  and the docs now give `pip install "agentcore[server] @ git+https://github.com/Manas-thakur/agentcore"`
+  (pin with `@v0.3.0`) and say the PyPI name is taken.
+- **Docker: creating the starter eval suite failed with a 500.** The server runs as uid 1000 but
+  its working directory was root-owned `/app`. The image now runs from `/data` (owned by the app
+  user; example suites in `/data/examples/evals`), and an unwritable eval directory returns a clear
+  error (`cannot write to evals: permission denied; set eval_dirs ...`) instead of a traceback.
+- **Docker: `AGENTCORE_MODEL=auto` in the image overrode `model` in a mounted `agentcore.toml`.**
+  The image no longer sets it; the default is still `auto`. The deployment docs explain the Git
+  Bash path conversion (`MSYS_NO_PATHCONV=1`, `$(pwd -W)`).
+- **`agentcore eval --baseline missing.json` silently skipped the regression gate.** A missing
+  baseline is now an error (exit 2); create it with `--save-baseline`.
+- **Eval suites are validated strictly.** Unknown keys (with "did you mean" hints), cases without
+  `name` or `input`, invalid `match` values (`fuzzy`; `Contains` is accepted as `contains`),
+  malformed tool-call expectations (`{tol: calculator}` used to crash with `KeyError`), invalid
+  regexes, rubrics and YAML are reported with the case and the allowed keys. A case with no checks
+  now fails with a `no_checks` metric instead of passing with score 1.0.
+- **The CLI prints one-line errors instead of tracebacks** for ordinary mistakes: bad model specs
+  (`bogus:x`, `openai:`), an unreachable or failing model server, missing suite / cassette /
+  `--docs` paths, invalid YAML, malformed suites, unknown tools or missing tool modules in
+  `agentcore.toml`. They exit 2; `--debug` (or `AGENTCORE_DEBUG=1`) shows the traceback.
+- **Graph: `timeout=` was ignored for sync nodes and sync fan-out ran serially.** Sync nodes now
+  run in worker threads, so timeouts apply and fan-out branches run concurrently. A timed-out node
+  reports `TimeoutError: node 'x' timed out after 0.5s` (it was an empty `TimeoutError: `).
+- Graph: a conditional edge can map a key to a list of nodes (fan-out), and a router result that
+  is not in `path_map` fails the run with a clear error instead of raising `KeyError`.
+- `Agent.run()` no longer raises on model errors: the result has `stop_reason="error"` and
+  `error` set, as documented. `raise_on_error=True` restores raising (the server uses it).
+- Eval rubrics accept the list form `[{criterion, weight}]` (it crashed) and plain criterion
+  lists. `--judge-model` judges only cases that define a rubric (new `--judge-all` judges every
+  case); the mock model answers judge prompts with valid JSON.
+- `agentcore eval --concurrency 0` hung; values below 1 are rejected. `--fail-under` is checked
+  to be a pass rate between 0 and 1, and the docs now describe the exit codes precisely.
+- `ExecutionEngine(before=..., after=...)` accepts a single callable as well as a list.
+- `@tool(retries=0)` was treated as "use the engine default" (2 retries); it now disables retries.
+  The default is `retries=None` (engine default).
+- `python_exec` returned `success=True` with `TIMEOUT` text when code ran too long; it is now a
+  failed call (`ToolTimeoutError`) and is not retried. The built-in `python_exec` blocks imports of
+  `os`, `subprocess`, `socket`, `shutil`, `ctypes` and similar modules by default (configurable
+  with `SandboxConfig(blocked_imports=...)`); the docs explain the Windows sandbox limitations.
+- RAG: `RAGPipeline().answer()` without a model returns an extractive, cited answer instead of
+  raising. Markdown front matter is stripped and its `title` used as the source title; `.mdx`
+  files are ingested (imports, exports and JSX removed, alt text kept). Sources use forward slashes.
+- Indexes: search filters can be dicts (`{"lang": "en"}`, `{"lang": ["en", "de"]}`) as well as
+  callables; a repeated id inside one `add()` call now upserts (last wins) in every index type.
+- A `SpecializedAgent` subclass can set `system_prompt` to a string. `Pipeline` stops at the first
+  failing member and reports it in `TeamResult.error` instead of returning empty output.
+- `/v1/chat/completions`: errors use OpenAI's shape with `param` (validation errors are `400`, not
+  FastAPI's `422`), unknown roles and `n > 1` are rejected, model failures are `502` with type
+  `server_error`, and streamed errors carry the upstream message as text (not `b'...'`).
+  `tools` / `tool_choice` are accepted and ignored (documented).
+- `/api/config` reports the port actually served (`agentcore serve --port N`) and lists only
+  tools defined in your tool modules as custom.
+- Unknown keys under `[server]` in `agentcore.toml` (e.g. `prot`) are errors; `port` and
+  `max_body_kb` are range-checked.
+- Two suite files with the same `name` are flagged (`duplicate_name`) and running by that name
+  returns 409 listing the files; the unknown-suite 404 no longer shows server paths.
+- Observability: with an OpenTelemetry SDK configured, AgentCore root spans use the OTel trace id
+  (and every span records `agentcore.trace_id`); eval runs are counted under `agent="eval"` instead
+  of one metrics series per case; `doctor` checks for the OTel SDK, not just the API;
+  `agentcore eval` writes traces (`kind:eval`) like web eval runs (`--no-trace` to skip).
+- Mock model: a lookup miss reads `I could not find an answer with lookup_fact: No matching fact
+  found.` (it was `The answer is No matching fact found..`), and `reflect_every=1` no longer turns
+  answers into refusals.
+- Smaller fixes: `traces list --limit 0` is rejected with a clear message; the starter suite says
+  "web app", not "dashboard"; `current_time` and `make_python_exec` are exported from
+  `agentcore.tools`; `chat -v --stream` prints the `[final ...]` summary on its own line;
+  `agentcore eval --markdown` prints the report path.
+
+### Docs
+
+- HTTP API: the `run_end` SSE event, eval run progress fields (`elapsed_s` is now also set after a
+  run finishes), OpenAI-compatible error shapes and ignored fields, starter-suite and
+  duplicate-name errors. The trace explorer's `stats` now follow the query (they covered the whole
+  time window) and the docs say so.
+- Graph `interrupts` (all pending) vs `interrupt` (the first one); eval case names, rubric formats
+  and judge scope; tool hook signatures; index filter signature.
+
 ## [0.3.0] - 2026-11-13
 
 ### Changed

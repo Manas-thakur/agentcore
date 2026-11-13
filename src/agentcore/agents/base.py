@@ -60,8 +60,14 @@ class SpecializedAgent:
         self.extra_tools = list(tools or [])
 
     # extension points ---------------------------------------------------------------
+    # Override ``system_prompt`` with a method, or set it to a string class attribute.
     def system_prompt(self) -> str:
         return f"You are the {self.name} agent. {self.role}"
+
+    def system_prompt_text(self) -> str:
+        """The system prompt, whether ``system_prompt`` is a method or a plain string."""
+        sp: Any = self.system_prompt
+        return str(sp() if callable(sp) else sp)
 
     def default_tools(self) -> list[Tool]:
         return []
@@ -83,7 +89,7 @@ class SpecializedAgent:
         return Agent(
             self.model,
             tools=[*self.default_tools(), *self.extra_tools],
-            system_prompt=self.system_prompt(),
+            system_prompt=self.system_prompt_text(),
             name=self.name,
             max_steps=self.max_steps,
             cost_tracker=self.cost_tracker,
@@ -99,7 +105,7 @@ class SpecializedAgent:
         out = self.postprocess(task, result)
         if result.stop_reason != "final":
             out.success = False
-            out.error = out.error or f"stopped: {result.stop_reason}"
+            out.error = out.error or result.error or f"stopped: {result.stop_reason}"
         return out
 
     def __repr__(self) -> str:

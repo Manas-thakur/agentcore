@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from agentcore.eval.suite import EvalCase, ToolCallExpectation
+from agentcore.eval.suite import EvalCase, ToolCallExpectation, normalize_rubric
 from agentcore.runtime.model_client import ModelClient
 from agentcore.types import Message
 
@@ -192,20 +192,34 @@ def parse_judge_json(text: str) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+DEFAULT_RUBRIC = {"correctness": 0.6, "completeness": 0.2, "clarity": 0.2}
+
+
 class LLMAsJudge(EvalMetric):
-    """Rubric-based grading by a (separate) judge model. Score = weighted mean / 10."""
+    """Rubric-based grading by a (separate) judge model. Score = weighted mean / 10.
+
+    By default only cases that define a ``rubric`` are judged. ``all_cases=True`` also
+    judges the other cases with ``rubric`` (default: correctness/completeness/clarity).
+    A rubric is ``{criterion: weight}``, ``[{criterion, weight}, ...]`` or a list of names.
+    """
 
     name = "llm_judge"
 
     def __init__(
-        self, judge: ModelClient, rubric: dict[str, float] | None = None, threshold: float = 0.7
+        self,
+        judge: ModelClient,
+        rubric: dict[str, float] | list[Any] | None = None,
+        threshold: float = 0.7,
+        *,
+        all_cases: bool = False,
     ):
         self.judge = judge
-        self.rubric = rubric or {"correctness": 0.6, "completeness": 0.2, "clarity": 0.2}
+        self.rubric = normalize_rubric(rubric) or dict(DEFAULT_RUBRIC)
         self.threshold = threshold
+        self.all_cases = all_cases
 
     def applies_to(self, case: EvalCase) -> bool:
-        return bool(case.rubric) or self.rubric is not None
+        return bool(case.rubric) or self.all_cases
 
     async def evaluate(self, case: EvalCase, run: EvalRun) -> MetricResult:
         rubric = case.rubric or self.rubric
@@ -218,7 +232,15 @@ class LLMAsJudge(EvalMetric):
         )
         resp = await self.judge.generate([Message.user(prompt)], temperature=0.0)
         data = parse_judge_json(resp.content)
-        if not data or "scores" not in data:
+        raw_scores = data.get("scores") if data else None
+        scores: dict[str, float] = {}
+        if isinstance(raw_scores, dict):
+            for k in rubric:
+                try:
+                    scores[k] = float(raw_scores.get(k, 0) or 0)
+                except (TypeError, ValueError):
+                    scores[k] = 0.0
+        else:
             return MetricResult(
                 self.name,
                 0.0,
@@ -226,7 +248,6 @@ class LLMAsJudge(EvalMetric):
                 self.threshold,
                 f"unparseable judge output: {resp.content[:200]!r}",
             )
-        scores = {k: float(data["scores"].get(k, 0)) for k in rubric}
         total_w = sum(rubric.values()) or 1.0
         score = sum(min(max(scores[k], 0), 10) / 10 * w for k, w in rubric.items()) / total_w
         return self._result(score, str(data.get("reasoning", "")), scores=scores)

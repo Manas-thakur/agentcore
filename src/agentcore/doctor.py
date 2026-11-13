@@ -14,6 +14,7 @@ from pathlib import Path
 import httpx
 
 from agentcore import __version__
+from agentcore._install import install_command
 from agentcore.config import Config, ConfigError, load_tool_modules, resolve_tools
 
 
@@ -25,7 +26,10 @@ class Check:
 
 
 def _has(module: str) -> bool:
-    return importlib.util.find_spec(module) is not None
+    try:
+        return importlib.util.find_spec(module) is not None
+    except (ImportError, ValueError):  # parent package missing (dotted names)
+        return False
 
 
 def _mask(value: str) -> str:
@@ -56,16 +60,17 @@ def run_checks(
     for extra, modules in (
         ("server", ["fastapi", "uvicorn"]),
         ("pydantic", ["pydantic"]),
-        ("otel", ["opentelemetry"]),
+        ("otel", ["opentelemetry.trace", "opentelemetry.sdk"]),
     ):
         missing = [m for m in modules if not _has(m)]
         if missing:
             status = "warn" if extra == "server" else "info"
-            checks.append(
-                Check(
-                    status, f"extra [{extra}]", f"not installed (pip install 'agentcore[{extra}]')"
-                )
+            state = (
+                "not installed"
+                if len(missing) == len(modules)
+                else f"incomplete, missing {', '.join(missing)}"
             )
+            checks.append(Check(status, f"extra [{extra}]", f"{state} ({install_command(extra)})"))
         else:
             checks.append(Check("ok", f"extra [{extra}]", "installed"))
     checks.append(

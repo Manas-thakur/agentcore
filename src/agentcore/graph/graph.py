@@ -18,10 +18,12 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import functools
 import inspect
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -55,6 +57,31 @@ def merge(old: Any, new: Any) -> dict[str, Any]:
 
 def add(old: Any, new: Any) -> Any:
     return (old or 0) + new
+
+
+# --- sync node execution ----------------------------------------------------------------
+
+# Sync node functions run in worker threads so ``timeout=`` applies to them and fan-out
+# targets run concurrently. A dedicated pool (not the loop's default executor) means a
+# timed-out node never blocks ``asyncio.run()`` from returning; the thread itself cannot be
+# killed and finishes in the background.
+_SYNC_POOL: ThreadPoolExecutor | None = None
+
+
+def _sync_pool() -> ThreadPoolExecutor:
+    global _SYNC_POOL
+    if _SYNC_POOL is None:
+        _SYNC_POOL = ThreadPoolExecutor(max_workers=32, thread_name_prefix="agentcore-graph")
+    return _SYNC_POOL
+
+
+def _is_async_callable(fn: Any) -> bool:
+    while isinstance(fn, functools.partial):
+        fn = fn.func
+    if inspect.iscoroutinefunction(fn):
+        return True
+    call = getattr(type(fn), "__call__", None)  # noqa: B004 - objects with an async __call__
+    return not inspect.isfunction(fn) and inspect.iscoroutinefunction(call)
 
 
 # --- interrupts -----------------------------------------------------------------------
@@ -119,7 +146,13 @@ class NodeSpec:
 class ConditionalEdge:
     source: str
     router: Callable[[State], Any]
-    path_map: dict[Any, str] | None = None
+    path_map: dict[Any, str | list[str]] | None = None
+
+    def targets(self) -> list[str]:
+        out: list[str] = []
+        for t in (self.path_map or {}).values():
+            out.extend([t] if isinstance(t, str) else list(t))
+        return out
 
 
 class StateGraph:
@@ -167,11 +200,20 @@ class StateGraph:
         self,
         source: str,
         router: Callable[[State], Any],
-        path_map: dict[Any, str] | Sequence[str] | None = None,
+        path_map: dict[Any, str | Sequence[str]] | Sequence[str] | None = None,
     ) -> StateGraph:
-        """``router(state)`` returns a key (or list of keys) mapped through ``path_map``."""
+        """``router(state)`` returns a key (or list of keys) mapped through ``path_map``.
+
+        A ``path_map`` value may be a list of nodes: that key fans out to all of them. A
+        router result that is not in ``path_map`` fails the run with a clear error.
+        """
         if isinstance(path_map, (list, tuple)):
             path_map = {p: p for p in path_map}
+        if path_map is not None:
+            path_map = {
+                k: v if isinstance(v, str) else list(v)  # type: ignore[misc]
+                for k, v in path_map.items()
+            }
         self.conditional.append(ConditionalEdge(source, router, path_map))  # type: ignore[arg-type]
         return self
 
@@ -194,7 +236,7 @@ class StateGraph:
         for ce in self.conditional:
             if ce.source not in known:
                 raise ValueError(f"conditional edge from unknown node {ce.source!r}")
-            for t in (ce.path_map or {}).values():
+            for t in ce.targets():
                 if t not in known:
                     raise ValueError(f"conditional edge targets unknown node {t!r}")
         for spec in self.nodes.values():
@@ -233,7 +275,8 @@ class StateGraph:
                     f"    {nid(ce.source)} -.-> |{ce.router.__name__}| ROUTER_{nid(ce.source)}{{{{?}}}}"
                 )
             for key, t in targets.items():
-                lines.append(f'    {nid(ce.source)} -.->|"{key}"| {nid(t)}')
+                for target in [t] if isinstance(t, str) else t:
+                    lines.append(f'    {nid(ce.source)} -.->|"{key}"| {nid(target)}')
         if highlight:
             lines += [
                 "    classDef done fill:#d4f7dc,stroke:#2f9e44",
@@ -293,7 +336,12 @@ class CompiledGraph:
         cp = Checkpoint(
             thread_id=thread_id or uuid.uuid4().hex[:12], graph=self.name, state=dict(inputs or {})
         )
-        cp.next_nodes = self._successors(START, cp)
+        try:
+            cp.next_nodes = self._successors(START, cp)
+        except Exception as exc:  # a router on START failed
+            cp.status, cp.error = "failed", f"routing from the start failed: {exc}"
+            self.checkpointer.put(cp)
+            return self._result(cp, failed_node=START)
         return await self._execute(cp, callbacks or [])
 
     async def resume(
@@ -353,10 +401,22 @@ class CompiledGraph:
             choice = ce.router(cp.state)
             keys = choice if isinstance(choice, (list, tuple, set)) else [choice]
             for key in keys:
-                target = ce.path_map[key] if ce.path_map is not None else key
-                if target != END and target not in g.nodes:
-                    raise WorkflowError(f"router of {node!r} returned unknown target {target!r}")
-                out.append(target)
+                if ce.path_map is not None:
+                    try:
+                        mapped = ce.path_map[key]
+                    except (KeyError, TypeError):
+                        raise WorkflowError(
+                            f"router of {node!r} returned {key!r}, which is not in its "
+                            f"path_map (keys: {list(ce.path_map)})"
+                        ) from None
+                else:
+                    mapped = key
+                for target in [mapped] if isinstance(mapped, str) else list(mapped):
+                    if target != END and target not in g.nodes:
+                        raise WorkflowError(
+                            f"router of {node!r} returned unknown target {target!r}"
+                        )
+                    out.append(target)
         for sources, target in g.joins:
             if node in sources:
                 key = f"{'|'.join(sources)}->{target}"
@@ -383,10 +443,26 @@ class CompiledGraph:
         ctx = _NodeContext(spec.name, resume)
         token = _node_ctx.set(ctx)
         try:
-            res = spec.fn(dict(state))
-            if inspect.isawaitable(res):
-                res = await (asyncio.wait_for(res, spec.timeout) if spec.timeout else res)
-            return res
+
+            async def invoke() -> Any:
+                if _is_async_callable(spec.fn):
+                    res = spec.fn(dict(state))
+                else:  # sync node: worker thread (context vars copied, so interrupt() works)
+                    loop = asyncio.get_running_loop()
+                    call = functools.partial(contextvars.copy_context().run, spec.fn, dict(state))
+                    res = await loop.run_in_executor(_sync_pool(), call)
+                if inspect.isawaitable(res):
+                    res = await res
+                return res
+
+            if not spec.timeout:
+                return await invoke()
+            try:
+                return await asyncio.wait_for(invoke(), spec.timeout)
+            except asyncio.TimeoutError:
+                raise TimeoutError(
+                    f"node {spec.name!r} timed out after {spec.timeout:g}s"
+                ) from None
         finally:
             _node_ctx.reset(token)
 
@@ -503,9 +579,14 @@ class CompiledGraph:
                     failed.append((name, value))
 
             next_nodes: list[str] = []
+            routing_error: tuple[str, BaseException] | None = None
             for name in completed:
                 cp.history.append(name)
-                next_nodes.extend(self._successors(name, cp))
+                try:
+                    next_nodes.extend(self._successors(name, cp))
+                except Exception as exc:  # a router error fails the run instead of raising
+                    routing_error = (name, exc)
+                    break
 
             unrecovered: list[tuple[str, BaseException]] = []
             for name, exc in failed:
@@ -519,6 +600,14 @@ class CompiledGraph:
                 else:
                     unrecovered.append((name, exc))
             failed = unrecovered
+            if routing_error is not None:
+                name, exc = routing_error
+                cp.status = "failed"
+                cp.error = f"routing after node {name!r} failed: {type(exc).__name__}: {exc}"
+                compensated = await self._compensate(cp, callbacks)
+                cp.next_nodes = []
+                self.checkpointer.put(cp)
+                return self._result(cp, failed_node=name, compensated=compensated)
             if failed:
                 name, exc = failed[0]
                 cp.status = "failed"

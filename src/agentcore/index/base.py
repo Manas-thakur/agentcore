@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -26,7 +26,52 @@ class SearchResult:
     metadata: dict[str, Any] | None = None
 
 
-Filter = Callable[[str, dict[str, Any]], bool]
+# A search filter is either a callable ``filter(id, metadata) -> bool`` or a dict of
+# metadata conditions that must all hold: ``{"lang": "en"}`` (equality) or
+# ``{"lang": ["en", "de"]}`` (one of). Items without metadata never match a dict filter.
+Filter = Callable[[str, dict[str, Any]], bool] | Mapping[str, Any]
+
+
+def matches_filter(filter: Filter | None, id_: str, metadata: dict[str, Any]) -> bool:
+    """Apply a callable or dict :data:`Filter` to one item."""
+    if filter is None:
+        return True
+    if isinstance(filter, Mapping):
+        for key, want in filter.items():
+            if key not in metadata:
+                return False
+            have = metadata[key]
+            if isinstance(want, (list, tuple, set, frozenset)):
+                if have not in want:
+                    return False
+            elif have != want:
+                return False
+        return True
+    if callable(filter):
+        return bool(filter(id_, metadata))
+    raise TypeError(
+        f"filter must be a callable(id, metadata) or a dict, got {type(filter).__name__}"
+    )
+
+
+def unique_batch(
+    vectors: np.ndarray, ids: list[str], metadata: list[dict[str, Any]] | None
+) -> tuple[np.ndarray, list[str], list[dict[str, Any]] | None]:
+    """Upsert semantics inside one ``add()``: for repeated ids the last occurrence wins."""
+    ids = [str(i) for i in ids]
+    if len(ids) != len(vectors):
+        raise ValueError("number of ids must match number of vectors")
+    if metadata is not None and len(metadata) != len(ids):
+        raise ValueError("metadata length must match ids")
+    if len(set(ids)) == len(ids):
+        return vectors, ids, metadata
+    last = {id_: i for i, id_ in enumerate(ids)}
+    keep = sorted(last.values())
+    return (
+        vectors[keep],
+        [ids[i] for i in keep],
+        None if metadata is None else [metadata[i] for i in keep],
+    )
 
 
 def normalize(x: np.ndarray) -> np.ndarray:
@@ -109,7 +154,7 @@ class VectorIndex(ABC):
                     self.metadata[i] = dict(m)
 
     def _passes(self, id_: str, filter: Filter | None) -> bool:
-        return filter is None or filter(id_, self.metadata.get(id_, {}))
+        return matches_filter(filter, id_, self.metadata.get(id_, {}))
 
     # persistence -------------------------------------------------------------
     def _state(self) -> tuple[dict[str, np.ndarray], dict[str, Any]]:

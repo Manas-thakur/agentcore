@@ -14,6 +14,7 @@ from agentcore.index.base import (
     as_matrix,
     scores_for,
     top_k,
+    unique_batch,
 )
 from agentcore.index.kmeans import _sq_dists, kmeans
 
@@ -69,9 +70,7 @@ class IVFIndex(VectorIndex):
     def add(
         self, vectors: Any, ids: list[str], metadata: list[dict[str, Any]] | None = None
     ) -> None:
-        raw = as_matrix(vectors, self.dimension)
-        if len(ids) != len(raw):
-            raise ValueError("number of ids must match number of vectors")
+        raw, ids, metadata = unique_batch(as_matrix(vectors, self.dimension), ids, metadata)
         if not self.is_trained:
             self.train(raw)
         x = self._prep(raw)

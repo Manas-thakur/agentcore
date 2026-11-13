@@ -62,7 +62,16 @@ extra_exporters=None)` installs the global tracer. The `JSONLTraceStore` writes 
 model, tool stats, errors). The CLI (`agentcore traces list|show`) and the web app read it.
 
 With the `otel` extra and `use_otel=True`, every span is mirrored to the OpenTelemetry API, so any
-configured exporter (OTLP, Jaeger, Tempo, ...) receives it as well.
+configured exporter (OTLP, Jaeger, Tempo, ...) receives it as well. The two share one trace id:
+when an OpenTelemetry SDK tracer provider is configured, a root span adopts the OTel trace id as
+its AgentCore `trace_id` (both are 32 hex characters), so the id in the web app is the id to
+search for in Jaeger or Tempo. Every mirrored span also carries `agentcore.trace_id` and
+`agentcore.span_id` attributes. With only `opentelemetry-api` installed (no SDK) OTel spans are
+no-ops and AgentCore keeps its own ids; `agentcore doctor` reports the `otel` extra as installed
+only when both the API and the SDK are present.
+
+`agentcore eval` writes traces too (one per case, `kind:eval` in the explorer, like eval runs
+started from the web app); pass `--no-trace` to skip them.
 
 ## Metrics
 
@@ -70,7 +79,9 @@ configured exporter (OTLP, Jaeger, Tempo, ...) receives it as well.
 `agentcore_agent_runs_total`, `agentcore_model_calls_total`, `agentcore_tokens_total`,
 `agentcore_model_latency_ms`, `agentcore_tool_calls_total` and `agentcore_tool_latency_ms`.
 `export_prometheus()` renders the Prometheus text format; `agentcore serve` exposes it at
-`GET /metrics`.
+`GET /metrics`. The `agent` label of `agentcore_agent_runs_total` is the agent name up to the
+first `:`, so eval runs (agents named `eval:<case>`) count under `agent="eval"` instead of one
+series per case.
 
 ## Logs and cost
 

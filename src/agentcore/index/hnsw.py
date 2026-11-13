@@ -14,7 +14,14 @@ from typing import Any
 
 import numpy as np
 
-from agentcore.index.base import Filter, Metric, SearchResult, VectorIndex, as_matrix
+from agentcore.index.base import (
+    Filter,
+    Metric,
+    SearchResult,
+    VectorIndex,
+    as_matrix,
+    unique_batch,
+)
 
 
 class HNSWIndex(VectorIndex):
@@ -156,9 +163,9 @@ class HNSWIndex(VectorIndex):
     def add(
         self, vectors: Any, ids: list[str], metadata: list[dict[str, Any]] | None = None
     ) -> None:
-        vecs = self._prep(as_matrix(vectors, self.dimension))
-        if len(ids) != len(vecs):
-            raise ValueError("number of ids must match number of vectors")
+        vecs, ids, metadata = unique_batch(
+            self._prep(as_matrix(vectors, self.dimension)), ids, metadata
+        )
         self._ensure_capacity(len(vecs))
         for vec, id_ in zip(vecs, ids):
             self._insert(vec, id_)

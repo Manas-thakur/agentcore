@@ -86,6 +86,24 @@ such as `mock` or `ollama:<model>`; unknown specs return `404 model_not_found`. 
 and string or text-part content. `temperature`, `max_tokens` / `max_completion_tokens` are passed
 to the model. The agent runs with the server's enabled tools (up to 8 steps).
 
+Compatibility notes:
+
+- `n` must be `1` (or omitted); `n > 1` returns `400` with `param: "n"`.
+- `tools`, `tool_choice` (and other OpenAI fields such as `user`) are accepted and **ignored**:
+  the agent calls the server's own tools itself and returns the final answer, so the response never
+  contains `tool_calls` for the client to execute.
+
+Errors use OpenAI's shape, `{"error": {"message", "type", "param", "code"}}`:
+
+| Status | `type` | When |
+|---|---|---|
+| `400` | `invalid_request_error` | Body does not match the schema (`param` names the field, e.g. `messages` or `messages.0.content`), an unknown role (`param: "messages.N.role"`), no user message, `n > 1` |
+| `404` | `invalid_request_error` (`code: model_not_found`) | Unknown model spec |
+| `502` | `server_error` | The model failed (server down, HTTP error); `message` has the upstream error as text |
+
+When streaming, a failure after the stream started is sent as one `data: {"error": {...}}` event
+(`type: "server_error"`) followed by `data: [DONE]`.
+
 ```bash
 curl -s http://127.0.0.1:8000/v1/chat/completions -H "Content-Type: application/json" \
      -d '{"model": "agentcore", "messages": [{"role": "user", "content": "What is 2 ** 10?"}]}'
@@ -119,11 +137,14 @@ Each event is `event: <name>` + `data: <json>`:
 | `tool_end` | `step`, `id`, `name`, `success`, `output`, `error`, `latency_ms` |
 | `reflection` | `step`, `content` |
 | `final` | `step`, `output` |
+| `run_end` | `step`, `stop_reason` (`final`, `max_steps`, `timeout`), `usage`, `duration_ms` (the agent loop finished; `done` follows) |
 | `done` | `session_id`, `trace_id`, `output`, `stop_reason`, `steps`, `usage`, `cost_usd`, `duration_ms` |
 | `stopped` | `trace_id` (the turn was cancelled) |
-| `error` | `message`, `trace_id` |
+| `error` | `message`, `trace_id` (the turn failed, e.g. the model is unreachable) |
 
-The stream ends with exactly one of `done`, `stopped` or `error`. A second turn on a busy session
+When the run fails, the agent first reports the failure as an `error` event with `step` and
+`error`, then the stream ends with the `error` event above (`message`, `trace_id`). Every stream
+ends with exactly one of `done`, `stopped` or that final `error`. A second turn on a busy session
 returns `409`. If the client disconnects, the agent run is cancelled.
 
 ## Sessions
@@ -161,6 +182,11 @@ Sessions are kept in memory and mirrored to `<state_dir>/sessions/<id>.json`.
 `p50_ms`, `p95_ms`, `p90_cost_usd`, `p90_tokens`) and the parsed `query`. An invalid query returns
 `400` with `{"detail", "position", "type": "query_error"}`.
 
+`total`, `histogram` and `stats` all describe the traces that match `query` inside the time
+window (`since`/`until`); with `query=status:error`, `stats.count` is the number of failed
+traces. `facets` count over the window with the query applied to the other fields, so the facet
+panel still shows the values you could switch to.
+
 `GET /api/traces/facets?query=` returns `count`, `models`, `names` and `facets`.
 `GET /api/traces/{id}` returns `{trace_id, summary, spans}`; `GET /api/traces/{id}/export`
 returns the same as a file download. Both accept a unique id prefix; `404` when nothing matches.
@@ -185,16 +211,23 @@ and returns `success`, `output`, `error`, `error_type`, `latency_ms`, `attempts`
 ## Evals
 
 - `GET /api/evals/suites`: `path`, `dir`, `name`, `description`, `cases`, `tools`, `model`, `tags`,
-  `case_names`, `last_run`, `baseline`; unreadable files are listed with an `error`.
+  `case_names`, `last_run`, `baseline`; unreadable or invalid files are listed with an `error`
+  (the validation message). Suites that share a `name` with another file have
+  `duplicate_name: true`.
 - `POST /api/evals/starter`: writes `starter.yaml` into the first eval directory (`201`), `409` if
-  it exists.
+  it exists, `500` with a `detail` such as `cannot write to evals: permission denied; set
+  eval_dirs in agentcore.toml (or AGENTCORE_EVAL_DIRS) to a writable folder` when the directory
+  is not writable.
 - `POST /api/evals/runs` with `{"suite": "<path or name>", "model": null, "tags": null}` starts a
-  background run and returns it (`202`); `404` for an unknown suite.
+  background run and returns it (`202`); `404` for an unknown suite, `409` when several files use
+  that suite name (run one by `path`), `400` for an invalid suite.
 - `GET /api/evals/runs?suite=&limit=` lists running and finished runs (newest first) with
   `is_baseline`.
-- `GET /api/evals/runs/{id}` returns status, progress (`done`, `total`, `passed`, `elapsed_s`),
-  `summary`, per-case `results` (metrics, trajectory, `trace_id`), and `baseline` + `diff` when the
-  suite has a baseline.
+- `GET /api/evals/runs/{id}` returns `status` (`queued`, `running`, `completed`, `failed`) and the
+  progress as top-level fields: `done`, `total`, `passed` (cases finished / in the suite / passed
+  so far), `started_at`, `finished_at` and `elapsed_s` (seconds so far while running; the total
+  run time once finished). Also `summary`, per-case `results` (metrics, trajectory, `trace_id`),
+  and `baseline` + `diff` when the suite has a baseline.
 - `POST /api/evals/runs/{id}/baseline` marks a completed run as the baseline.
 - `GET /api/evals/matrix?suite=&limit=8` returns `runs` (oldest first), `cases` with one cell per
   run (`passed`, `score`, `failing` metrics, `regressed`, `baseline_regressed`), `baseline` and the
@@ -205,10 +238,13 @@ and returns `success`, `output`, `error`, `error_type`, `latency_ms`, `attempts`
 The effective configuration: `config_file`, `model`, `models`, `tools`, `tool_modules`,
 `trace_dir`, `state_dir`, `workspace`, `eval_dirs`, `server` (`host`, `port`,
 `auth_enabled`, `cors_origins`, `max_body_bytes`), plus `version`, `python`, `default_model`,
-`enabled_tools` and `custom_tools`. Never includes the API key.
+`enabled_tools` and `custom_tools` (tools defined in your `tool_modules`; built-ins they re-export,
+such as `calculator`, are not listed). `server.host` and `server.port` are the address actually
+being served (`agentcore serve --port 9000` reports `9000`). Never includes the API key.
 
 ## Limits and errors
 
 - `401` `invalid_api_key` when a key is required and missing or wrong.
 - `413` `request_too_large` above `max_body_kb` (default 1024 KB).
-- `422` for bodies that do not match the schema (FastAPI validation).
+- `422` for bodies that do not match the schema (FastAPI validation), except on
+  `/v1/chat/completions`, which answers `400` in OpenAI's error shape.
