@@ -2,3 +2,5 @@
 src/agentcore/server/static/** text=auto eol=lf linguist-generated=true
 web/pnpm-lock.yaml linguist-generated=true
 site/pnpm-lock.yaml linguist-generated=true
+# Web sources: LF on every OS so the committed build is identical everywhere.
+web/** text=auto eol=lf

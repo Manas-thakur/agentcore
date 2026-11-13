@@ -109,6 +109,7 @@ def test_dockerfile_runs_from_a_writable_dir_without_a_model_default():
 
 
 def test_starter_suite_reports_unwritable_eval_dir(tmp_path, monkeypatch):
+    pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
     from agentcore.server import create_app
@@ -569,6 +570,7 @@ def test_string_system_prompt_and_pipeline_failures():
 
 @pytest.fixture
 def oai_client(tmp_path):
+    pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
     from agentcore.server import create_app
@@ -600,6 +602,7 @@ def test_chat_completions_errors_are_openai_shaped(oai_client):
 
 
 def test_chat_completions_upstream_failure_is_502(tmp_path):
+    pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
     from agentcore.server import create_app
@@ -638,6 +641,8 @@ def test_streamed_http_errors_are_decoded_text():
 
 
 def test_serve_reports_the_actual_port_and_custom_tools(tmp_path, monkeypatch):
+    pytest.importorskip("fastapi")
+    pytest.importorskip("uvicorn")
     import uvicorn
     from fastapi.testclient import TestClient
 
@@ -667,6 +672,7 @@ def test_server_section_keys_are_validated(tmp_path):
 
 
 def test_duplicate_suite_names_are_ambiguous_and_404_hides_paths(tmp_path):
+    pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
     from agentcore.server import create_app
@@ -770,6 +776,7 @@ def test_chat_verbose_stream_puts_the_summary_on_its_own_line(tmp_path, monkeypa
 
 
 def test_eval_run_elapsed_is_set_after_completion(tmp_path):
+    pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
     from agentcore.server import create_app
@@ -789,6 +796,7 @@ def test_eval_run_elapsed_is_set_after_completion(tmp_path):
 
 
 def test_explore_stats_follow_the_query(tmp_path):
+    pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
     from agentcore.server import create_app

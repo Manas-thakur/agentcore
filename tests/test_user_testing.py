@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from agentcore import Agent, tool
 from agentcore.runtime.providers.mock import MockModel, find_math_expression
 from agentcore.tools import calculator
@@ -37,6 +39,7 @@ def test_mock_prefers_lookup_tool_when_asked_to_look_something_up():
 
 
 def test_reexported_builtin_tool_is_not_labelled_custom(tmp_path):
+    pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
     from agentcore.config import Config
