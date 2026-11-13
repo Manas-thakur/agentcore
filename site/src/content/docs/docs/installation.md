@@ -26,7 +26,7 @@ pip install "agentcore[server] @ git+https://github.com/Manas-thakur/agentcore"
 pip install "agentcore[all] @ git+https://github.com/Manas-thakur/agentcore"
 
 # Pin a release tag
-pip install "agentcore[server] @ git+https://github.com/Manas-thakur/agentcore@v0.3.0"
+pip install "agentcore[server] @ git+https://github.com/Manas-thakur/agentcore@v0.3.1"
 ```
 
 The web app is a pre-built React bundle that ships **inside the Python package**

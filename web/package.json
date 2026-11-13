@@ -1,7 +1,7 @@
 {
   "name": "agentcore-web",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "AgentCore web app (built into src/agentcore/server/static)",
   "type": "module",
   "packageManager": "pnpm@10.34.5",

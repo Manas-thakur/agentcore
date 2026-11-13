@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-13
+
 ### Fixed
 
 - **Install hints no longer point at PyPI.** The `agentcore` package on PyPI is a different

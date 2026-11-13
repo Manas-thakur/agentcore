@@ -2,7 +2,7 @@
   "name": "agentcore-site",
   "private": true,
   "type": "module",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "AgentCore landing page and documentation (Astro + Starlight)",
   "packageManager": "pnpm@10.34.5",
   "engines": {

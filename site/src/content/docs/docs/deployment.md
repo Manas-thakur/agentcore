@@ -26,7 +26,7 @@ docker run -d --name agentcore -p 8000:8000 \
   -e AGENTCORE_MODEL=mock \
   -e AGENTCORE_API_KEY=change-me \
   -v agentcore-data:/data \
-  ghcr.io/manas-thakur/agentcore:0.3.0
+  ghcr.io/manas-thakur/agentcore:0.3.1
 ```
 
 Build it yourself with `docker build -t agentcore .` from the repository. The web app is already
@@ -37,7 +37,7 @@ To serve your own tools and eval suites, mount your project and point the config
 ```bash
 docker run -d -p 8000:8000 -v "$PWD":/project -w /project \
   -e AGENTCORE_TRACE_DIR=/project/.agentcore/traces \
-  ghcr.io/manas-thakur/agentcore:0.3.0 agentcore serve --host 0.0.0.0 --port 8000
+  ghcr.io/manas-thakur/agentcore:0.3.1 agentcore serve --host 0.0.0.0 --port 8000
 ```
 
 The project's `agentcore.toml` (model, tools, tool modules, eval dirs) is used as is. The server
@@ -53,7 +53,7 @@ Windows-style path:
 
 ```bash
 MSYS_NO_PATHCONV=1 docker run -d -p 8000:8000 -v "$(pwd -W)":/project -w /project \
-  ghcr.io/manas-thakur/agentcore:0.3.0 agentcore serve --host 0.0.0.0 --port 8000
+  ghcr.io/manas-thakur/agentcore:0.3.1 agentcore serve --host 0.0.0.0 --port 8000
 ```
 
 PowerShell and cmd.exe are not affected (use `${PWD}` or `%cd%`).
