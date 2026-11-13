@@ -1,0 +1,4 @@
+# Build output of web/ (committed so `pip install` needs no Node.js): always LF, never merged by hand.
+src/agentcore/server/static/** text=auto eol=lf linguist-generated=true
+web/pnpm-lock.yaml linguist-generated=true
+site/pnpm-lock.yaml linguist-generated=true

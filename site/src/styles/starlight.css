@@ -1,0 +1,43 @@
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+/* Match the web app: Geist type, neutral surfaces, one indigo accent. */
+:root {
+  --sl-font: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --sl-font-mono: "Geist Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sl-color-accent-low: #1e1b4b;
+  --sl-color-accent: #6366f1;
+  --sl-color-accent-high: #c7d2fe;
+  --sl-color-white: #f5f6fa;
+  --sl-color-gray-1: #e4e6ee;
+  --sl-color-gray-2: #c4c7d4;
+  --sl-color-gray-3: #9095a8;
+  --sl-color-gray-4: #5e6377;
+  --sl-color-gray-5: #3b3f50;
+  --sl-color-gray-6: #23262f;
+  --sl-color-black: #15161c;
+}
+
+:root[data-theme="light"] {
+  --sl-color-accent-low: #e0e7ff;
+  --sl-color-accent: #4f46e5;
+  --sl-color-accent-high: #312e81;
+  --sl-color-white: #15161c;
+  --sl-color-gray-1: #23262f;
+  --sl-color-gray-2: #3b3f50;
+  --sl-color-gray-3: #5e6377;
+  --sl-color-gray-4: #9095a8;
+  --sl-color-gray-5: #c4c7d4;
+  --sl-color-gray-6: #eceef4;
+  --sl-color-gray-7: #f6f7fb;
+  --sl-color-black: #ffffff;
+}
+
+.sl-markdown-content img {
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.6rem;
+}
+
+.sl-markdown-content table {
+  font-size: var(--sl-text-sm);
+}

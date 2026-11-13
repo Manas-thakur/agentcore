@@ -1,6 +1,7 @@
 name: Release
 
-# Push a tag like v0.2.0 to build the sdist + wheel, publish a GitHub Release with them,
+# Push a tag like v0.3.0 to build the web app (web/ -> src/agentcore/server/static), then the
+# sdist + wheel, publish a GitHub Release with them,
 # push a Docker image to ghcr.io/manas-thakur/agentcore and (optionally) publish to PyPI.
 #
 # PyPI publishing uses trusted publishing (OIDC, no API token). It is skipped until you
@@ -13,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to (re)build, e.g. v0.2.0"
+        description: "Existing tag to (re)build, e.g. v0.3.0"
         required: true
 
 permissions:
@@ -36,6 +37,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Build the web app into the Python package
+        run: |
+          pnpm --dir web install --frozen-lockfile
+          pnpm --dir web build
+          git diff --stat src/agentcore/server/static
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
@@ -66,7 +80,7 @@ jobs:
           cd /tmp/smoke
           /tmp/wheel-env/bin/python agent.py --model mock
           /tmp/wheel-env/bin/agentcore eval --suite evals/basic.yaml --model mock
-          /tmp/wheel-env/bin/python -c "import agentcore.server.app as a; assert (a.STATIC_DIR / 'index.html').exists()"
+          /tmp/wheel-env/bin/python -c "import agentcore.server.app as a; assert (a.STATIC_DIR / 'index.html').exists(); assert any((a.STATIC_DIR / 'assets').glob('*.js'))"
       - uses: actions/upload-artifact@v4
         with:
           name: dist

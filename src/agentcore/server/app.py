@@ -2,7 +2,8 @@
 
 Endpoints (see the README "HTTP API" section for request/response shapes):
 
-* ``GET  /``                              - web app (static HTML/CSS/JS, no build step)
+* ``GET  /``                              - web app (React build in ``static/``; SPA routes such
+                                            as ``/traces/<id>`` fall back to ``index.html``)
 * ``GET  /health``                        - liveness, version, model, auth mode
 * ``GET  /v1/models``                     - OpenAI-style model list
 * ``POST /v1/agent``                      - run the agent once (optionally in a session)
@@ -52,17 +53,24 @@ from agentcore.types import Message, ToolCall
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 OAI_DEFAULT_NAMES = {"", "agentcore", "default"}
 
-# Windows can map .js to text/plain via the registry, which breaks ES modules.
+# Windows can map .js to text/plain via the registry, which breaks ES modules; fonts may be missing.
 mimetypes.add_type("text/javascript", ".js")
 mimetypes.add_type("text/css", ".css")
 mimetypes.add_type("image/svg+xml", ".svg")
+mimetypes.add_type("font/woff2", ".woff2")
+mimetypes.add_type("font/woff", ".woff")
 
 
 def dashboard_html() -> str:
-    """The web app's HTML shell (kept for backwards compatibility)."""
-    return (
-        (STATIC_DIR / "index.html").read_text(encoding="utf-8").replace("{{version}}", __version__)
-    )
+    """The web app's HTML shell (``static/index.html`` built from ``web/`` by Vite)."""
+    index = STATIC_DIR / "index.html"
+    if not index.exists():  # pragma: no cover - only in a source checkout without a build
+        return (
+            "<!doctype html><title>AgentCore</title><h1>AgentCore</h1><p>The web app is not "
+            "built. Run <code>pnpm --dir web install &amp;&amp; pnpm --dir web build</code>, or use "
+            "the API at <a href='/docs'>/docs</a>.</p>"
+        )
+    return index.read_text(encoding="utf-8").replace("{{version}}", __version__)
 
 
 def sse(event: str, data: Any) -> str:
@@ -152,7 +160,7 @@ def create_app(
     )
     from agentcore.server.evals import EvalManager
     from agentcore.server.query import QueryError, parse_query
-    from agentcore.server.security import APIKeyMiddleware, BodySizeLimitMiddleware
+    from agentcore.server.security import SPA_ROUTES, APIKeyMiddleware, BodySizeLimitMiddleware
     from agentcore.server.sessions import SessionStore, valid_session_id
 
     # --- configuration (explicit arguments > config > env > defaults) -------------------------
@@ -269,9 +277,12 @@ def create_app(
         return s
 
     # --- shell, health, metadata ----------------------------------------------------------
+    def shell() -> HTMLResponse:
+        return HTMLResponse(dashboard_html(), headers={"Cache-Control": "no-cache"})
+
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     def index() -> HTMLResponse:
-        return HTMLResponse(dashboard_html(), headers={"Cache-Control": "no-cache"})
+        return shell()
 
     @app.get("/favicon.ico", include_in_schema=False)
     def favicon() -> Response:
@@ -281,15 +292,18 @@ def create_app(
             headers={"Cache-Control": "max-age=86400"},
         )
 
-    class RevalidatedStatic(StaticFiles):
-        """Static assets that browsers revalidate (ETag) so upgrades show up immediately."""
+    class AppStatic(StaticFiles):
+        """Hashed build assets are immutable; everything else is revalidated (ETag)."""
 
         async def get_response(self, path: str, scope: Any) -> Any:
             response = await super().get_response(path, scope)
-            response.headers["Cache-Control"] = "no-cache"
+            if path.replace("\\", "/").startswith("assets/") and response.status_code == 200:
+                response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            else:
+                response.headers["Cache-Control"] = "no-cache"
             return response
 
-    app.mount("/static", RevalidatedStatic(directory=str(STATIC_DIR)), name="static")
+    app.mount("/static", AppStatic(directory=str(STATIC_DIR), check_dir=False), name="static")
 
     @app.get("/health")
     def health() -> dict[str, Any]:
@@ -978,5 +992,15 @@ def create_app(
             return evals.set_baseline(run_id)
         except KeyError as exc:
             raise HTTPException(404, str(exc).strip('"')) from exc
+
+    # --- web app routes (client-side routing) -----------------------------------------------
+    # Registered last so every API route wins. Deep links such as /traces/<id>?query=... and
+    # /playground/<session> load the app shell; the browser router takes it from there.
+    @app.get("/{section}", response_class=HTMLResponse, include_in_schema=False)
+    @app.get("/{section}/{rest:path}", response_class=HTMLResponse, include_in_schema=False)
+    def spa(section: str, rest: str = "") -> HTMLResponse:
+        if section not in SPA_ROUTES:
+            raise HTTPException(404, "Not Found")
+        return shell()
 
     return app

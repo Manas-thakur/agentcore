@@ -7,3 +7,6 @@
 workspace
 tests
 plans
+web/node_modules
+site
+docs

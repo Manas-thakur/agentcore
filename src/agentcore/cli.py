@@ -415,9 +415,7 @@ def build_parser() -> argparse.ArgumentParser:
     ts.add_argument("--json", action="store_true")
     t.set_defaults(fn=cmd_traces)
 
-    s = sub.add_parser(
-        "serve", help="start the HTTP API + trace dashboard (needs the 'server' extra)"
-    )
+    s = sub.add_parser("serve", help="start the web app + HTTP API (needs the 'server' extra)")
     s.add_argument("--host", default=None, help="default: config or 127.0.0.1")
     s.add_argument("--port", type=int, default=None, help="default: config or 8000")
     s.add_argument("--model", default=None, help=model_help)

@@ -15,6 +15,17 @@ ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
 
 PUBLIC_PATHS = frozenset({"/", "/health", "/favicon.ico", "/favicon.svg"})
 PUBLIC_PREFIXES = ("/static/",)
+# Top-level paths of the browser app (client-side routes). GET requests for them return the
+# public HTML shell, which then prompts for the key; they never expose data themselves.
+SPA_ROUTES = frozenset({"playground", "traces", "evals", "overview", "tools", "settings"})
+
+
+def is_public(method: str, path: str) -> bool:
+    if path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES):
+        return True
+    if method in ("GET", "HEAD"):
+        return path.strip("/").split("/", 1)[0] in SPA_ROUTES
+    return False
 
 
 async def _send_json(send: Send, status: int, payload: dict[str, Any], headers=()) -> None:
@@ -48,8 +59,9 @@ def extract_key(headers: list[tuple[bytes, bytes]]) -> str | None:
 class APIKeyMiddleware:
     """Require ``Authorization: Bearer <key>`` or ``X-API-Key: <key>`` outside public paths.
 
-    The web UI shell (``/`` and ``/static/*``) and ``/health`` stay public so the browser can
-    load the app and prompt for the key; every API route is protected.
+    The web UI shell (``/``, ``/static/*`` and the app's own routes such as ``/traces``) and
+    ``/health`` stay public so the browser can load the app and prompt for the key; every API
+    route is protected.
     """
 
     def __init__(self, app: ASGIApp, api_key: str):
@@ -60,8 +72,7 @@ class APIKeyMiddleware:
         if scope["type"] != "http" or scope.get("method") == "OPTIONS":
             await self.app(scope, receive, send)
             return
-        path = scope.get("path", "")
-        if path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES):
+        if is_public(scope.get("method", "GET"), scope.get("path", "")):
             await self.app(scope, receive, send)
             return
         key = extract_key(scope.get("headers") or [])

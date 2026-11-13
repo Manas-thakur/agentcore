@@ -4,6 +4,7 @@ traces/overview, tools, auth, CORS and request limits."""
 from __future__ import annotations
 
 import json
+import re
 import time
 
 import pytest
@@ -66,28 +67,37 @@ def chat(client: TestClient, message: str, **extra) -> list[tuple[str, dict]]:
 
 
 def test_web_app_shell_and_static(client):
-    html = client.get("/").text
-    assert "AgentCore" in html and "/static/js/app.js?v=" in html and "{{version}}" not in html
-    js = client.get("/static/js/app.js")
-    assert js.status_code == 200 and "javascript" in js.headers["content-type"]
-    assert js.headers["cache-control"] == "no-cache"
+    from agentcore import __version__
+
+    r = client.get("/")
+    html = r.text
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-cache"
+    assert "AgentCore" in html and "{{version}}" not in html
+    assert f'name="agentcore-version" content="{__version__}"' in html
+    # every asset the shell references is served (hashed, cacheable forever)
+    assets = re.findall(r'(?:src|href)="(/static/assets/[^"]+)"', html)
+    assert any(a.endswith(".js") for a in assets) and any(a.endswith(".css") for a in assets)
+    for path in assets:
+        res = client.get(path)
+        assert res.status_code == 200, path
+        assert "immutable" in res.headers["cache-control"]
+        if path.endswith(".js"):
+            assert "javascript" in res.headers["content-type"]
+    assert client.get("/static/favicon.svg").status_code == 200
+    assert client.get("/favicon.ico").status_code == 200
+    # client-side routes (deep links) get the same shell; unknown paths and API paths do not
     for path in (
-        "/static/app.css",
-        "/static/js/api.js",
-        "/static/js/md.js",
-        "/static/js/views/playground.js",
-        "/static/js/views/traces.js",
-        "/static/js/views/evals.js",
-        "/static/js/views/overview.js",
-        "/static/js/views/tools.js",
-        "/static/js/views/settings.js",
-        "/static/js/palette.js",
-        "/static/js/peek.js",
-        "/static/js/query.js",
-        "/static/js/trace-detail.js",
-        "/favicon.ico",
+        "/playground",
+        "/traces",
+        "/traces/abc123?query=status:error",
+        "/evals",
+        "/settings",
     ):
-        assert client.get(path).status_code == 200, path
+        res = client.get(path)
+        assert res.status_code == 200 and 'id="root"' in res.text, path
+    assert client.get("/nope").status_code == 404
+    assert client.get("/api/nope").status_code == 404
+    assert client.get("/api/nope").headers["content-type"].startswith("application/json")
     cfg = client.get("/api/config").json()
     assert cfg["default_model"] == "mock" and cfg["server"]["auth_enabled"] is False
     assert "api_key" not in json.dumps(cfg)
@@ -436,7 +446,10 @@ def _eval_scenario(client: TestClient, suite_dir) -> None:
 def test_api_key_auth(tmp_path):
     c = make_client(tmp_path, api_key="s3cret-test-key")
     assert c.get("/health").json()["auth"] is True
-    assert c.get("/").status_code == 200 and c.get("/static/app.css").status_code == 200
+    assert c.get("/").status_code == 200 and c.get("/static/favicon.svg").status_code == 200
+    # app routes load the shell, which then asks for the key
+    assert c.get("/traces/abc").status_code == 200
+    assert c.post("/traces").status_code == 401
     r = c.get("/api/traces")
     assert r.status_code == 401 and r.json()["error"]["type"] == "invalid_api_key"
     assert c.post("/v1/agent", json={"input": "1+1"}).status_code == 401

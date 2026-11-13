@@ -29,3 +29,12 @@ eval-report.md
 .DS_Store
 Thumbs.db
 .env
+
+# Web app (web/) and docs site (site/)
+node_modules/
+web/.vite/
+web/coverage/
+web/*.tsbuildinfo
+site/dist/
+site/.astro/
+.eslintcache

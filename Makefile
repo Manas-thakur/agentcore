@@ -1,7 +1,7 @@
 # Developer shortcuts. Windows users without `make` can run the commands directly.
 MODEL ?= mock
 
-.PHONY: install test lint format eval examples serve doctor build docker clean check
+.PHONY: install test lint format eval examples serve doctor build docker clean check web site
 
 check: lint test eval
 
@@ -34,8 +34,21 @@ serve:
 doctor:
 	uv run agentcore doctor --model $(MODEL)
 
-build:
+build: web
 	uv build
+
+# Web app (web/) -> src/agentcore/server/static; commit the output
+web:
+	pnpm --dir web install --frozen-lockfile
+	pnpm --dir web typecheck
+	pnpm --dir web lint
+	pnpm --dir web test
+	pnpm --dir web build
+
+# Landing page + docs (site/) -> site/dist
+site:
+	pnpm --dir site install --frozen-lockfile
+	pnpm --dir site build
 
 docker:
 	docker compose up --build

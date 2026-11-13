@@ -1,0 +1,439 @@
+---
+import { Image } from "astro:assets";
+import githubDark from "@shikijs/themes/github-dark";
+import { Code } from "astro:components";
+
+import "@fontsource-variable/geist";
+import "@fontsource-variable/geist-mono";
+import "../styles/landing.css";
+
+import logo from "../assets/logo.svg?raw";
+import shotEvals from "../../../docs/screenshots/evals.png";
+import shotOverview from "../../../docs/screenshots/overview.png";
+import shotPlayground from "../../../docs/screenshots/playground.png";
+import shotTools from "../../../docs/screenshots/tools.png";
+import shotTraces from "../../../docs/screenshots/traces.png";
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+const docs = (p = "") => `${base}/docs/${p}`;
+const repo = "https://github.com/Manas-thakur/agentcore";
+
+const install = `pip install "agentcore[server] @ git+${repo}"
+agentcore serve --model mock     # http://127.0.0.1:8000, no model server needed`;
+
+const agentCode = `from agentcore import Agent, create_model, tool
+from agentcore.tools import calculator
+
+
+@tool
+def get_weather(city: str, unit: str = "celsius") -> str:
+    """Get the current weather for a city.
+
+    Args:
+        city: City name, e.g. "Pune".
+        unit: "celsius" or "fahrenheit".
+    """
+    return f"22 degrees {unit} and sunny in {city}"
+
+
+agent = Agent(create_model("mock"), tools=[calculator, get_weather])
+result = agent.run_sync("What is 17 * 23 + 4?")
+print(result.output, result.stop_reason, result.usage.total_tokens)
+# The answer is 395. final 174`;
+
+const evalCode = `# evals/calculator.yaml
+#   agentcore eval --suite evals/calculator.yaml --model mock
+name: calculator-basic
+agent:
+  tools: [calculator]
+  max_steps: 5
+cases:
+  - name: multiply_add
+    input: "What is 17 * 23 + 4?"
+    expected_output: "395"          # contains | exact | regex
+    expected_tool_calls:
+      - tool: calculator
+        args: {expression: "17 * 23 + 4"}
+    max_steps: 3
+  - name: power
+    input: "What is 2 ** 16?"
+    expected_output: "65536"
+    expected_trajectory: [calculator]`;
+
+const graphCode = `from agentcore.graph import END, START, StateGraph, append, interrupt
+
+g = StateGraph("review", reducers={"notes": append})
+g.add_node("search_a", lambda s: {"notes": "A"})
+g.add_node("search_b", lambda s: {"notes": "B"})
+g.add_node("approve", lambda s: {"ok": interrupt({"question": "Ship it?"}) == "yes"})
+g.add_node("ship", lambda s: {"shipped": True}, compensate=lambda s: print("rollback"))
+g.add_edge(START, ["search_a", "search_b"])      # parallel fan-out
+g.add_edge(["search_a", "search_b"], "approve")  # join
+g.add_conditional_edges("approve", lambda s: "yes" if s["ok"] else "no", {"yes": "ship", "no": END})
+app = g.compile()
+
+r = app.run_sync({})                   # -> "interrupted", waiting for a human
+r = app.resume_sync(r.thread_id, "yes")
+print(r.status, r.state)  # completed {'notes': ['A', 'B'], 'ok': True, 'shipped': True}`;
+
+const layers = [
+  { id: "runtime", name: "runtime", text: "ReAct loop, native tool calls, streaming, memory" },
+  { id: "tools", name: "tools", text: "@tool -> JSON Schema, validation, sandbox" },
+  { id: "eval", name: "eval", text: "suites, trajectories, judge, replay, regressions" },
+  { id: "rag", name: "rag / index", text: "BM25 + dense hybrid search, HNSW, IVF, PQ" },
+  { id: "graph", name: "graph", text: "state graphs, checkpoints, HITL, saga" },
+  { id: "agents", name: "agents", text: "specialists over an A2A message bus" },
+  { id: "obs", name: "obs", text: "spans, metrics, logs, cost" },
+];
+
+const features = [
+  {
+    title: "Runtime",
+    href: docs("modules/runtime/"),
+    text: "A ReAct loop with native tool calling, parallel tools, token streaming, events, memory tiers, context budgeting, timeouts and stuck detection. One string picks the model: mock, ollama:<model> or openai:<model>.",
+  },
+  {
+    title: "Tools",
+    href: docs("modules/tools/"),
+    text: "@tool turns typed functions into JSON-Schema tools (dataclasses, Literal, Enum, TypedDict, pydantic). Arguments are validated and coerced; timeouts, retries, rate limits and a subprocess sandbox are built in.",
+  },
+  {
+    title: "Eval",
+    href: docs("modules/eval/"),
+    text: "YAML suites check outputs, tool calls, trajectories and step budgets, with optional LLM-as-judge. Record model responses once and replay them deterministically; compare against a baseline in CI.",
+  },
+  {
+    title: "RAG",
+    href: docs("modules/rag/"),
+    text: "Loaders and markdown-aware chunkers, BM25 plus dense retrieval fused with reciprocal rank fusion, lexical and MMR rerankers, and answers with numbered citations.",
+  },
+  {
+    title: "Vector indexes",
+    href: docs("modules/indexes/"),
+    text: "Flat, HNSW, IVF, scalar and product quantization implemented with numpy, with metadata filters, deletes, save/load and a recall@k helper to measure them.",
+  },
+  {
+    title: "Workflow graphs",
+    href: docs("modules/graph/"),
+    text: "State graphs with conditional edges, parallel fan-out and joins, reducers, retries, fallbacks, checkpoints, interrupt() for human approval, saga compensation and Mermaid export.",
+  },
+  {
+    title: "Multi-agent",
+    href: docs("modules/agents/"),
+    text: "Planner, researcher, coder and reviewer specialists on an in-process A2A bus (direct, broadcast, topics, request/response), with manager-worker, pipeline and peer-review patterns.",
+  },
+  {
+    title: "Observability",
+    href: docs("modules/obs/"),
+    text: "Async-safe spans for runs, steps, model and tool calls in JSONL files, optional OpenTelemetry mirroring, Prometheus-style metrics, JSON logs and per-model cost tracking.",
+  },
+  {
+    title: "Web app and API",
+    href: docs("web-app/"),
+    text: "agentcore serve: streaming chat with a step timeline, a trace explorer with a query language, an eval results matrix, an overview of latency and cost, plus an OpenAI-compatible endpoint.",
+  },
+];
+
+const shots = [
+  { id: "traces", label: "Traces", img: shotTraces, alt: "Trace explorer with query bar, facets with counts, histogram, table and a side peek with the span tree", text: "Query language, facet counts, a zoomable histogram and a span tree with Preview, Attributes and JSON." },
+  { id: "evals", label: "Evals", img: shotEvals, alt: "Eval results matrix of cases by runs with a regression outlined and the case detail open", text: "Cases by recent runs, regressions outlined, and each case's metrics and trajectory one click away." },
+  { id: "overview", label: "Overview", img: shotOverview, alt: "Overview with KPI cards, sparklines and charts for runs and latency", text: "Runs, success rate, latency percentiles, tokens and cost, against the previous period." },
+  { id: "tools", label: "Tools", img: shotTools, alt: "Tools page with a generated try-it form, a result and the JSON Schema", text: "Each tool's JSON Schema, generated from type hints and docstrings, and a form to invoke it." },
+];
+
+const faqs = [
+  {
+    q: "Do I need a GPU, a model server or an API key to try it?",
+    a: "No. A deterministic, rule-based mock model drives the examples, the tests and CI, so every feature runs offline. Switch to Ollama or any OpenAI-compatible server by changing the model string.",
+  },
+  {
+    q: "Why build it without LangChain, LangGraph or other agent frameworks?",
+    a: "So that the code shows how agent systems work: the loop, the schema generation, hybrid search, HNSW, the graph engine and the evaluation harness are each a readable module with tests. Libraries are used for transport (httpx), math (numpy) and parsing (pyyaml), not for architecture.",
+  },
+  {
+    q: "Which models does it support?",
+    a: "Ollama through its native API, OpenAI, and any OpenAI-compatible server (vLLM, LM Studio, llama.cpp, Groq and others) through OPENAI_BASE_URL. Tool calling uses each backend's native API, so pick a model that supports tools.",
+  },
+  {
+    q: "Can existing OpenAI clients talk to my agent?",
+    a: "Yes. agentcore serve exposes POST /v1/chat/completions (including streaming), backed by the agent and the server's tools, and adds the trace id to every response.",
+  },
+  {
+    q: "Is it production-ready?",
+    a: "It is beta software (0.3.0) with a tested, documented API. The server is single-user and local-first: one optional API key, file-based state, no accounts or database. Put it behind your own access control for anything shared.",
+  },
+  {
+    q: "Does the web app need Node.js or load anything from the internet?",
+    a: "No. The web app is pre-built into the Python package, fonts are self-hosted, and it talks only to the server that served it.",
+  },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AgentCore: build, trace and evaluate AI agents from scratch</title>
+    <meta
+      name="description"
+      content="AgentCore is an open-source agent platform in plain Python: ReAct runtime, tools, evals, RAG, vector indexes, workflow graphs, multi-agent and observability, with a web app to chat, trace and catch regressions. Runs offline."
+    />
+    <link rel="icon" type="image/svg+xml" href={`${base}/favicon.svg`} />
+    <meta property="og:title" content="AgentCore" />
+    <meta property="og:description" content="Build, trace and evaluate AI agents, from scratch, in plain Python." />
+    <meta name="color-scheme" content="light dark" />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="nav">
+      <div class="wrap nav-inner">
+        <a class="brand" href={`${base}/`} aria-label="AgentCore home">
+          <span class="brand-logo" set:html={logo} />
+          <span>AgentCore</span>
+        </a>
+        <nav aria-label="Main" class="nav-links">
+          <a href={docs()}>Docs</a>
+          <a href={docs("quickstart/")}>Quickstart</a>
+          <a href={docs("reference/http-api/")} class="hide-sm">API</a>
+          <a href={`${repo}/releases`} class="hide-sm">Releases</a>
+          <a href={repo} class="btn btn-ghost btn-sm" aria-label="AgentCore on GitHub">
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
+            <span>GitHub</span>
+          </a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero">
+        <div class="wrap hero-inner">
+          <p class="eyebrow">Open source · MIT · Python 3.10+</p>
+          <h1>Build, trace and evaluate AI agents.<br /><span class="grad">From scratch, in plain Python.</span></h1>
+          <p class="lede">
+            AgentCore is a complete agent platform you can read: a ReAct runtime, typed tools, evals with replay, hybrid
+            RAG, vector indexes, workflow graphs, multi-agent teams and tracing, plus a web app to chat with your agent,
+            inspect every step and catch regressions. It runs offline out of the box.
+          </p>
+          <div class="cta">
+            <a class="btn btn-primary" href={docs("quickstart/")}>Get started</a>
+            <a class="btn btn-ghost" href={docs()}>Read the docs</a>
+            <a class="btn btn-ghost" href={repo}>View on GitHub</a>
+          </div>
+          <div class="install" aria-label="Install and run">
+            <Code code={install} lang="bash" theme={githubDark} />
+          </div>
+        </div>
+        <figure class="wrap hero-shot">
+          <div class="frame">
+            <div class="frame-bar" aria-hidden="true"><i></i><i></i><i></i><span>127.0.0.1:8000/playground</span></div>
+            <Image src={shotPlayground} alt="The AgentCore Playground: a chat reply with its run summary expanded into the step timeline, next to the run settings" widths={[720, 1440]} sizes="(max-width: 1200px) 100vw, 1152px" loading="eager" />
+          </div>
+          <figcaption>The Playground. Screenshots show sample data from the offline mock model and generated traces.</figcaption>
+        </figure>
+      </section>
+
+      <section class="section" aria-labelledby="arch-title">
+        <div class="wrap">
+          <p class="kicker">Architecture</p>
+          <h2 id="arch-title">Eight modules that compose into a platform</h2>
+          <p class="section-lede">
+            Each module is a normal Python package with its own tests, usable on its own. Together they cover the path
+            from one model call to an observable, evaluated multi-agent system.
+          </p>
+          <div class="arch">
+            <div class="arch-top">
+              <strong>agentcore serve</strong>
+              <span>web app · HTTP API · SSE chat · OpenAI-compatible <code>/v1/chat/completions</code></span>
+            </div>
+            <ol class="arch-flow">
+              {
+                layers.map((l) => (
+                  <li>
+                    <a href={docs(`modules/${l.id === "rag" ? "rag" : l.id}/`)}>
+                      <code>{l.name}</code>
+                      <span>{l.text}</span>
+                    </a>
+                  </li>
+                ))
+              }
+            </ol>
+            <p class="arch-note">
+              Traces, chat sessions and eval history are plain files (JSONL / JSON). The web app reads the same trace files
+              the library writes; nothing else needs to run.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section alt" aria-labelledby="features-title">
+        <div class="wrap">
+          <p class="kicker">What's inside</p>
+          <h2 id="features-title">Every layer of an agent system, implemented</h2>
+          <div class="grid">
+            {
+              features.map((f) => (
+                <a class="card" href={f.href}>
+                  <h3>{f.title}</h3>
+                  <p>{f.text}</p>
+                  <span class="more">Read more →</span>
+                </a>
+              ))
+            }
+          </div>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="app-title">
+        <div class="wrap">
+          <p class="kicker">The web app</p>
+          <h2 id="app-title">See what your agent did, and whether it got worse</h2>
+          <p class="section-lede">
+            <code>agentcore serve</code> ships a web app built on shadcn/ui: keyboard-first, light and dark, and usable on a
+            phone. <a href={docs("web-app/")}>Tour every page →</a>
+          </p>
+          <div class="tabs" data-tabs>
+            <div class="tablist" role="tablist" aria-label="Web app pages">
+              {
+                shots.map((s, i) => (
+                  <button role="tab" id={`tab-${s.id}`} aria-controls={`panel-${s.id}`} aria-selected={i === 0 ? "true" : "false"} tabindex={i === 0 ? 0 : -1}>
+                    {s.label}
+                  </button>
+                ))
+              }
+            </div>
+            {
+              shots.map((s, i) => (
+                <div role="tabpanel" id={`panel-${s.id}`} aria-labelledby={`tab-${s.id}`} hidden={i !== 0}>
+                  <p class="shot-text">{s.text}</p>
+                  <div class="frame">
+                    <Image src={s.img} alt={s.alt} widths={[720, 1440]} sizes="(max-width: 1200px) 100vw, 1152px" />
+                  </div>
+                </div>
+              ))
+            }
+          </div>
+          <p class="note">Sample data: the offline mock model plus generated traces, so the charts have shape.</p>
+        </div>
+      </section>
+
+      <section class="section alt" aria-labelledby="code-title">
+        <div class="wrap">
+          <p class="kicker">Code</p>
+          <h2 id="code-title">Small APIs, real examples</h2>
+          <p class="section-lede">These run as written with the offline mock model.</p>
+          <div class="tabs" data-tabs>
+            <div class="tablist" role="tablist" aria-label="Code samples">
+              <button role="tab" id="tab-agent" aria-controls="panel-agent" aria-selected="true" tabindex="0">Agent with @tool</button>
+              <button role="tab" id="tab-eval" aria-controls="panel-eval" aria-selected="false" tabindex="-1">Eval suite (YAML)</button>
+              <button role="tab" id="tab-graph" aria-controls="panel-graph" aria-selected="false" tabindex="-1">Workflow graph</button>
+            </div>
+            <div role="tabpanel" id="panel-agent" aria-labelledby="tab-agent">
+              <Code code={agentCode} lang="python" theme={githubDark} />
+            </div>
+            <div role="tabpanel" id="panel-eval" aria-labelledby="tab-eval" hidden>
+              <Code code={evalCode} lang="yaml" theme={githubDark} />
+            </div>
+            <div role="tabpanel" id="panel-graph" aria-labelledby="tab-graph" hidden>
+              <Code code={graphCode} lang="python" theme={githubDark} />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="why-title">
+        <div class="wrap two">
+          <div>
+            <p class="kicker">Philosophy</p>
+            <h2 id="why-title">No frameworks. Just the parts, done properly.</h2>
+            <p class="section-lede">
+              Many agent projects are a few framework calls glued together. AgentCore implements the parts those frameworks
+              hide, so you can read how a ReAct loop, JSON-Schema generation, BM25 + dense fusion, HNSW, a checkpointing
+              graph engine and a deterministic eval harness actually work, and change them.
+            </p>
+          </div>
+          <ul class="principles">
+            <li><strong>No framework dependencies for core logic.</strong> httpx for transport, numpy for math, pyyaml for parsing.</li>
+            <li><strong>Independently testable.</strong> Model calls are mocked or replayed; the whole test suite runs offline in seconds.</li>
+            <li><strong>Deterministic where possible.</strong> A mock model and recorded cassettes make agent runs reproducible.</li>
+            <li><strong>Observable by default.</strong> Runs, model calls, tool calls, graph nodes and messages all emit spans, metrics and costs.</li>
+            <li><strong>Model-agnostic.</strong> <code>mock</code>, <code>ollama:&lt;model&gt;</code> or <code>openai:&lt;model&gt;</code>: one string.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="section alt" aria-labelledby="faq-title">
+        <div class="wrap narrow">
+          <p class="kicker">FAQ</p>
+          <h2 id="faq-title">Questions</h2>
+          <div class="faq">
+            {
+              faqs.map((f) => (
+                <details>
+                  <summary>{f.q}</summary>
+                  <p>{f.a}</p>
+                </details>
+              ))
+            }
+          </div>
+        </div>
+      </section>
+
+      <section class="section cta-band">
+        <div class="wrap narrow center">
+          <h2>Try it in two minutes</h2>
+          <p class="section-lede">Install, start the server with the mock model, and open the web app. No API key needed.</p>
+          <div class="cta center">
+            <a class="btn btn-primary" href={docs("quickstart/")}>Quickstart</a>
+            <a class="btn btn-ghost" href={docs("installation/")}>Install options</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="wrap footer-inner">
+        <div class="brand">
+          <span class="brand-logo" set:html={logo} />
+          <span>AgentCore</span>
+        </div>
+        <nav aria-label="Footer" class="footer-links">
+          <a href={docs()}>Docs</a>
+          <a href={docs("changelog/")}>Changelog</a>
+          <a href={docs("contributing/")}>Contributing</a>
+          <a href={repo}>GitHub</a>
+          <a href={`${repo}/releases`}>Releases</a>
+          <a href={`${repo}/blob/main/LICENSE`}>MIT License</a>
+        </nav>
+      </div>
+    </footer>
+
+    <script>
+      // Accessible tabs (WAI-ARIA pattern): click or arrow keys.
+      for (const root of document.querySelectorAll<HTMLElement>("[data-tabs]")) {
+        const tabs = [...root.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+        const select = (t: HTMLButtonElement, focus = false) => {
+          for (const x of tabs) {
+            const on = x === t;
+            x.setAttribute("aria-selected", String(on));
+            x.tabIndex = on ? 0 : -1;
+            const panel = document.getElementById(x.getAttribute("aria-controls") || "");
+            if (panel) panel.hidden = !on;
+          }
+          if (focus) t.focus();
+        };
+        tabs.forEach((t, i) => {
+          t.addEventListener("click", () => select(t));
+          t.addEventListener("keydown", (e) => {
+            if (e.key === "ArrowRight") select(tabs[(i + 1) % tabs.length], true);
+            else if (e.key === "ArrowLeft") select(tabs[(i - 1 + tabs.length) % tabs.length], true);
+            else if (e.key === "Home") select(tabs[0], true);
+            else if (e.key === "End") select(tabs[tabs.length - 1], true);
+            else return;
+            e.preventDefault();
+          });
+        });
+      }
+    </script>
+  </body>
+</html>

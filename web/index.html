@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="AgentCore: chat with your agent, inspect traces, run evals." />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="agentcore-version" content="{{version}}" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>AgentCore</title>
+    <script>
+      // Apply the saved (or system) theme before first paint, so there is no flash.
+      try {
+        var t = localStorage.getItem("agentcore.theme");
+        var dark = t === "dark" || (t !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+        if (dark) document.documentElement.classList.add("dark");
+        document.documentElement.style.colorScheme = dark ? "dark" : "light";
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <noscript>The AgentCore web app needs JavaScript. The HTTP API is documented at /docs.</noscript>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

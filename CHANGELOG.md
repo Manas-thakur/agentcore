@@ -6,23 +6,40 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-13
+
 ### Changed
 
-- **Web app UI/UX rebuild** (still no build step; patterns and rationale in
-  `docs/design/references.md`):
-  - *Traces* is now an explorer: query bar with a small query language and autocomplete, facet
-    sidebar with per-value counts, volume histogram with drag-to-zoom, quick filters (Errors,
-    Slow > p95, Expensive), dense sortable table, and a resizable side peek with metadata pills,
-    a nested span tree with latency bars and Preview / Attributes / JSON tabs. `j`/`k`/`Enter`/`Esc`
-    keyboard navigation; filters, sort, time range and the open trace live in the URL.
-  - *Playground*: each reply starts with a collapsible run summary that expands into a step
-    timeline (model calls, tool calls with arguments and results, "added to context" chips);
-    run settings move to a collapsible right panel with switches and a max-steps slider.
-  - *Evals*: results matrix (cases x recent runs) with regressions outlined and a case side peek
-    showing metrics, trajectory and the case across runs.
-  - *Overview*: KPI cards with sparklines and deltas vs the previous period; tool error rates.
-  - *Shell*: sectioned sidebar, `Ctrl/Cmd+K` command palette, `?` shortcut help, `g`-prefixed
-    navigation, calmer visual system, 375 px layouts with sheets for filters and peeks.
+- **The web app is rebuilt on a component kit**: Vite + React 19 + TypeScript + Tailwind CSS v4 +
+  shadcn/ui (Radix primitives), with the agent patterns from shadcn's AI Elements (Message,
+  Chat with Message Scroller, Prompt Input, Tool, Task, Chain of Thought, Reasoning, Queue,
+  Confirmation, Context, Model Selector, Code Block, Stack Trace, Test Results, Subagent).
+  Sources live in `web/`; `pnpm --dir web build` writes the bundle into
+  `src/agentcore/server/static/`, which is committed so `pip install` still needs no Node.js.
+  Fonts (Geist, Geist Mono) are self-hosted; no CDN scripts or remote fonts. Every capability of
+  the previous UI is kept:
+  - *Playground*: streaming chat with server-side sessions, a run summary that expands into a step
+    timeline (context, model calls, reasoning, tool calls with arguments and results, errors with
+    stack frames), run settings (model picker with `/v1/models` + free text, tool switches, max
+    steps, system prompt), Stop, View trace, a context meter, the mock-model notice and example
+    prompts.
+  - *Traces*: query bar with autocomplete and pills, facet sidebar with counts, histogram with
+    drag-to-zoom, quick filters, a dense server-sorted table (TanStack Table), a resizable side
+    peek with the span tree and Preview / Attributes / JSON tabs (nested subagent runs shown in
+    the preview), `j`/`k` navigation and URL state.
+  - *Evals*: suites, background runs with progress and a queue of cases, results matrix with
+    regressions and the case peek, run history, baselines, the starter-suite button.
+  - *Overview*: KPI cards with sparklines and deltas, shadcn charts (Recharts) for runs, latency,
+    tokens and cost, top tools with error rates, models, recent failures.
+  - *Tools*: schema + generated try-it form; tools that run code, write files or use the network
+    ask for confirmation first. *Settings*, the API-key prompt, `Ctrl/Cmd+K` command palette,
+    shortcuts help, light/dark, and sheets at phone width.
+- The app uses real paths (`/traces/<id>?query=...`, `/playground/<session>`) instead of hash
+  routes; the server returns the app shell for these paths (an SPA fallback limited to the app's
+  routes) and old `#/...` links are redirected. With an API key set, these shell routes stay
+  public like `/` (they contain no data); every API route still needs the key.
+- Hashed build assets are served with `Cache-Control: immutable`; the shell is revalidated.
+- `agentcore serve --help` describes the web app instead of the old dashboard.
 
 ### Added
 
@@ -31,6 +48,12 @@ All notable changes to this project are documented here. The format follows
   `GET /api/evals/matrix`, `previous` period KPIs and tool `error_rate` in `/api/overview`.
 - Chat traces carry `session.id`; chat turns record per-step model parts and the context given to
   the model; eval case results include the agent `trace_id`.
+- Documentation site and landing page (Astro + Starlight) in `site/`, published to
+  <https://manas-thakur.github.io/agentcore/> by `.github/workflows/pages.yml`.
+- CI: a `web` job (install with the frozen lockfile, typecheck, ESLint, Vitest, build, and a check
+  that the committed build is up to date); the release workflow builds the web app before the
+  Python distributions.
+- `CONTRIBUTING.md`.
 
 ## [0.2.0] - 2026-11-13
 
@@ -87,5 +110,7 @@ All notable changes to this project are documented here. The format follows
   regression checks, RAG with hybrid search, from-scratch vector indexes, workflow graphs,
   multi-agent patterns, observability, CLI, FastAPI server with a trace dashboard.
 
+[Unreleased]: https://github.com/Manas-thakur/agentcore/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Manas-thakur/agentcore/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Manas-thakur/agentcore/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Manas-thakur/agentcore/releases/tag/v0.1.0

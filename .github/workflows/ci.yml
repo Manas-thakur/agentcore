@@ -6,6 +6,42 @@ on:
   pull_request:
 
 jobs:
+  web:
+    name: web app (typecheck, lint, test, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Lint
+        run: pnpm lint
+      - name: Unit tests
+        run: pnpm test
+      - name: Build into src/agentcore/server/static
+        run: pnpm build
+      - name: Committed build is up to date
+        working-directory: .
+        run: |
+          git status --porcelain src/agentcore/server/static
+          git diff --exit-code src/agentcore/server/static
+          test -z "$(git status --porcelain src/agentcore/server/static)" || {
+            echo "::error::src/agentcore/server/static is out of date: run 'pnpm --dir web build' and commit the result"
+            exit 1
+          }
+
   test:
     name: lint + test (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
